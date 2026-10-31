@@ -109,6 +109,7 @@ pub fn normalize_usage_response(raw: &Value, account_label: Option<String>) -> P
         account_label: label,
         windows,
         note: None,
+        resets: None,
     }
 }
 
@@ -226,6 +227,13 @@ pub enum LocalUsageError {
     /// telling apart from an expired token the user can simply refresh.
     Forbidden,
     Request(String),
+}
+
+impl LocalUsageError {
+    /// No Kiro login exists here, as opposed to one that failed.
+    pub fn is_not_configured(&self) -> bool {
+        matches!(self, Self::Credentials(LocalCredentialError::NotFound))
+    }
 }
 
 impl std::fmt::Display for LocalUsageError {

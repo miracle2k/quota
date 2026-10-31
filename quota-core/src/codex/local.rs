@@ -11,7 +11,12 @@ use std::path::{Path, PathBuf};
 
 /// Where the Codex CLI writes its credentials. `CODEX_HOME` relocates it.
 pub fn local_credentials_path() -> Option<PathBuf> {
-    crate::local_paths::provider_home("CODEX_HOME", ".codex").map(|home| home.join("auth.json"))
+    crate::local_paths::provider_home("CODEX_HOME", ".codex").map(|home| credentials_path_in(&home))
+}
+
+/// Where the Codex CLI keeps a login when `CODEX_HOME` points at `codex_home`.
+pub fn credentials_path_in(codex_home: &Path) -> PathBuf {
+    codex_home.join("auth.json")
 }
 
 #[derive(Clone)]
@@ -21,6 +26,22 @@ pub struct LocalCodexCredentials {
     pub account_id: Option<String>,
     pub email: Option<String>,
     pub plan: Option<String>,
+}
+
+impl LocalCodexCredentials {
+    /// Which ChatGPT login this is: the workspace account plus the signed-in
+    /// email, since several people can share one workspace. `None` when the
+    /// file carried neither.
+    pub fn identity(&self) -> Option<String> {
+        if self.account_id.is_none() && self.email.is_none() {
+            return None;
+        }
+        Some(format!(
+            "{}:{}",
+            self.account_id.as_deref().unwrap_or_default(),
+            self.email.as_deref().unwrap_or_default().to_lowercase()
+        ))
+    }
 }
 
 /// Deliberately hand-written so a token can never reach the Debug output.

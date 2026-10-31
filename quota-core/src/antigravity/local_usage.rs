@@ -84,6 +84,7 @@ pub fn normalize_quota_response(raw: &Value, account_label: Option<String>) -> P
         account_label,
         windows,
         note: None,
+        resets: None,
     }
 }
 
@@ -159,6 +160,13 @@ pub enum LocalUsageError {
     NoProject,
     Unauthorized,
     Request(String),
+}
+
+impl LocalUsageError {
+    /// No Antigravity login exists here, as opposed to one that failed.
+    pub fn is_not_configured(&self) -> bool {
+        matches!(self, Self::Credentials(LocalCredentialError::NotFound))
+    }
 }
 
 impl std::fmt::Display for LocalUsageError {

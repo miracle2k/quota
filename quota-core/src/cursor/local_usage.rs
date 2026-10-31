@@ -35,6 +35,7 @@ pub fn normalize_usage_response(raw: &Value, account_label: Option<String>) -> P
             reset_at: billing_cycle_end(raw),
         }],
         note: None,
+        resets: None,
     }
 }
 
@@ -80,6 +81,13 @@ pub enum LocalUsageError {
     Credentials(LocalCredentialError),
     Unauthorized,
     Request(String),
+}
+
+impl LocalUsageError {
+    /// No Cursor login exists here, as opposed to one that failed.
+    pub fn is_not_configured(&self) -> bool {
+        matches!(self, Self::Credentials(LocalCredentialError::NotFound))
+    }
 }
 
 impl std::fmt::Display for LocalUsageError {

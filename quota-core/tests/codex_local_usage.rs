@@ -138,3 +138,54 @@ fn an_explicit_account_label_wins_over_the_payload_plan() {
 
     assert_eq!(usage.account_label.as_deref(), Some("pro"));
 }
+
+#[test]
+fn reads_the_banked_reset_count() {
+    let raw = json!({
+        "rate_limit": {
+            "primary_window": { "used_percent": 100, "limit_window_seconds": 18000 }
+        },
+        "rate_limit_reset_credits": { "available_count": 2, "applicable_available_count": 1 }
+    });
+
+    let resets = normalize_usage_response(&raw, None).resets.expect("resets");
+
+    assert_eq!(resets.available, 2);
+    // The count comes without dates; those need a separate call.
+    assert_eq!(resets.expires_at, None);
+}
+
+#[test]
+fn a_payload_without_reset_credits_carries_no_reset_information() {
+    let raw = json!({
+        "rate_limit": {
+            "primary_window": { "used_percent": 10, "limit_window_seconds": 18000 }
+        }
+    });
+
+    assert_eq!(normalize_usage_response(&raw, None).resets, None);
+}
+
+#[test]
+fn a_login_is_identified_by_workspace_and_email() {
+    // Two people can share one workspace, so the account id alone would merge
+    // them. Email case differs between sources, so it is compared lowercased.
+    let credentials = quota_core::codex::local::LocalCodexCredentials {
+        access_token: "token".to_string(),
+        account_id: Some("acct-1".to_string()),
+        email: Some("Someone@Example.com".to_string()),
+        plan: None,
+    };
+    assert_eq!(
+        credentials.identity().as_deref(),
+        Some("acct-1:someone@example.com")
+    );
+
+    let anonymous = quota_core::codex::local::LocalCodexCredentials {
+        access_token: "token".to_string(),
+        account_id: None,
+        email: None,
+        plan: None,
+    };
+    assert_eq!(anonymous.identity(), None);
+}

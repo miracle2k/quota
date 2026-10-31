@@ -54,6 +54,7 @@ pub fn normalize_billing_response(raw: &Value, account_label: Option<String>) ->
             reset_at: period_end(config),
         }],
         note,
+        resets: None,
     }
 }
 
@@ -152,6 +153,13 @@ pub enum LocalUsageError {
     Expired,
     Unauthorized,
     Request(String),
+}
+
+impl LocalUsageError {
+    /// No Grok login exists here, as opposed to one that failed.
+    pub fn is_not_configured(&self) -> bool {
+        matches!(self, Self::Credentials(LocalCredentialError::NotFound))
+    }
 }
 
 impl std::fmt::Display for LocalUsageError {

@@ -1,10 +1,10 @@
 //! Fetch Codex usage with the locally stored Codex CLI token and normalize the
 //! response into the shared usage model.
 
-use crate::usage::{ProviderUsage, UsageWindow};
+use crate::usage::{LimitResets, ProviderUsage, UsageWindow};
 use serde_json::Value;
 
-use super::local::{read_local_credentials, LocalCredentialError};
+use super::local::{read_local_credentials, LocalCodexCredentials, LocalCredentialError};
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 
@@ -31,7 +31,22 @@ pub fn normalize_usage_response(raw: &Value, account_label: Option<String>) -> P
             window_from(secondary, "Wk"),
         ],
         note: None,
+        resets: limit_resets(raw),
     }
+}
+
+/// Banked usage-limit resets, which the payload counts in
+/// `rate_limit_reset_credits`. The count carries no expiry; that needs a
+/// separate call, which this reader does not make.
+fn limit_resets(raw: &Value) -> Option<LimitResets> {
+    let count = raw
+        .get("rate_limit_reset_credits")?
+        .get("available_count")?
+        .as_u64()?;
+    Some(LimitResets {
+        available: u32::try_from(count).unwrap_or(u32::MAX),
+        expires_at: None,
+    })
 }
 
 /// Build one window, preferring a label derived from the window's own length
@@ -95,6 +110,17 @@ pub enum LocalUsageError {
     Request(String),
 }
 
+impl LocalUsageError {
+    /// No Codex login with usage exists here, as opposed to one that failed.
+    /// An API-key login counts, because it has no usage window to report.
+    pub fn is_not_configured(&self) -> bool {
+        matches!(
+            self,
+            Self::Credentials(LocalCredentialError::NotFound | LocalCredentialError::ApiKeyOnly)
+        )
+    }
+}
+
 impl std::fmt::Display for LocalUsageError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -111,7 +137,14 @@ impl std::fmt::Display for LocalUsageError {
 /// Read local credentials and fetch current usage. Never writes to disk.
 pub async fn fetch_local_usage() -> Result<ProviderUsage, LocalUsageError> {
     let credentials = read_local_credentials().map_err(LocalUsageError::Credentials)?;
+    fetch_usage(&credentials).await
+}
 
+/// Fetch current usage for credentials already read, such as one of several
+/// logins. Never writes to disk.
+pub async fn fetch_usage(
+    credentials: &LocalCodexCredentials,
+) -> Result<ProviderUsage, LocalUsageError> {
     let mut request = reqwest::Client::new()
         .get(USAGE_URL)
         .header(reqwest::header::ACCEPT, "application/json")
@@ -150,5 +183,5 @@ pub async fn fetch_local_usage() -> Result<ProviderUsage, LocalUsageError> {
     let raw: Value =
         serde_json::from_str(&body).map_err(|err| LocalUsageError::Request(err.to_string()))?;
 
-    Ok(normalize_usage_response(&raw, credentials.plan))
+    Ok(normalize_usage_response(&raw, credentials.plan.clone()))
 }

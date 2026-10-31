@@ -1,5 +1,6 @@
 use quota_core::claude::local::{
-    parse_credentials_json, read_local_credentials_at, LocalCredentialError, KEYCHAIN_SERVICE,
+    keychain_service_for_config_dir, parse_account_identity, parse_credentials_json,
+    read_local_credentials_at, ClaudeLogin, LocalCredentialError, KEYCHAIN_SERVICE,
 };
 use std::fs;
 
@@ -117,4 +118,80 @@ fn parses_the_payload_the_macos_keychain_returns() {
 fn the_keychain_service_matches_what_claude_code_writes() {
     // A typo here means the macOS fallback silently finds nothing.
     assert_eq!(KEYCHAIN_SERVICE, "Claude Code-credentials");
+}
+
+#[test]
+fn a_config_dir_login_uses_the_keychain_item_claude_code_names_after_it() {
+    // Claude Code appends the first eight hex digits of the SHA-256 of the
+    // CLAUDE_CONFIG_DIR value. The expected value was computed independently.
+    assert_eq!(
+        keychain_service_for_config_dir("/Users/test/.claude-work"),
+        "Claude Code-credentials-03abf0ee"
+    );
+
+    let login = ClaudeLogin::for_config_dir("/Users/test/.claude-work");
+    assert_eq!(login.keychain_service(), "Claude Code-credentials-03abf0ee");
+    assert_eq!(
+        login.credentials_path(),
+        std::path::PathBuf::from("/Users/test/.claude-work/.credentials.json")
+    );
+    assert_eq!(
+        login.account_file_path(),
+        Some(std::path::PathBuf::from(
+            "/Users/test/.claude-work/.claude.json"
+        ))
+    );
+}
+
+#[test]
+fn the_default_login_uses_the_plain_keychain_item_and_the_home_account_file() {
+    let login = ClaudeLogin::default_dir().expect("home directory");
+    let home = dirs::home_dir().expect("home directory");
+
+    assert_eq!(login.keychain_service(), KEYCHAIN_SERVICE);
+    assert_eq!(
+        login.credentials_path(),
+        home.join(".claude").join(".credentials.json")
+    );
+    assert_eq!(login.account_file_path(), Some(home.join(".claude.json")));
+}
+
+#[test]
+fn a_config_dir_login_reads_the_credentials_file_inside_it() {
+    let path = temp_file(
+        "config-dir",
+        r#"{"claudeAiOauth":{"accessToken":"secret-token","subscriptionType":"max"}}"#,
+    );
+    let dir = path
+        .parent()
+        .expect("parent")
+        .to_string_lossy()
+        .into_owned();
+
+    let credentials = ClaudeLogin::for_config_dir(&dir)
+        .read_credentials()
+        .expect("credentials");
+
+    assert_eq!(credentials.access_token, "secret-token");
+    assert_eq!(credentials.subscription_type.as_deref(), Some("max"));
+}
+
+#[test]
+fn reads_the_signed_in_account_from_the_claude_json_file() {
+    let raw = r#"{
+        "numStartups": 3,
+        "projects": { "/tmp/x": { "history": [] } },
+        "oauthAccount": {
+            "accountUuid": "account-1",
+            "organizationUuid": "org-1",
+            "emailAddress": "someone@example.com"
+        }
+    }"#;
+    assert_eq!(
+        parse_account_identity(raw).as_deref(),
+        Some("org-1:account-1")
+    );
+
+    assert_eq!(parse_account_identity(r#"{"numStartups": 3}"#), None);
+    assert_eq!(parse_account_identity("not json"), None);
 }

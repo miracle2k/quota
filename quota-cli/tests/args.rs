@@ -9,13 +9,43 @@ fn argv(items: &[&str]) -> Vec<String> {
 #[test]
 fn usage_defaults_to_human_output() {
     let parsed = parse_args(&argv(&["usage"])).expect("parse");
-    assert_eq!(parsed, Command::Usage { json: false });
+    assert_eq!(
+        parsed,
+        Command::Usage {
+            json: false,
+            all: false
+        }
+    );
 }
 
 #[test]
 fn usage_accepts_the_json_flag() {
     let parsed = parse_args(&argv(&["usage", "--json"])).expect("parse");
-    assert_eq!(parsed, Command::Usage { json: true });
+    assert_eq!(
+        parsed,
+        Command::Usage {
+            json: true,
+            all: false
+        }
+    );
+}
+
+#[test]
+fn usage_accepts_the_all_flag_alone_or_with_json() {
+    assert_eq!(
+        parse_args(&argv(&["usage", "--all"])),
+        Ok(Command::Usage {
+            json: false,
+            all: true
+        })
+    );
+    assert_eq!(
+        parse_args(&argv(&["usage", "--all", "--json"])),
+        Ok(Command::Usage {
+            json: true,
+            all: true
+        })
+    );
 }
 
 #[test]

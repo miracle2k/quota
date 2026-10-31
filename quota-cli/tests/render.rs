@@ -1,8 +1,10 @@
 //! Covers the text report's window rendering, including the reset durations
 //! the Herdr sidebar token deliberately leaves out.
 
-use quota_cli::render::usage_detail;
-use quota_core::usage::{ProviderUsage, UsageWindow};
+use quota_cli::accounts::AccountReport;
+use quota_cli::render::{account_name, shown_in_text, usage_detail, usage_record};
+use quota_core::providers::ProviderError;
+use quota_core::usage::{LimitResets, ProviderUsage, UsageWindow};
 
 const NOW: i64 = 1_757_500_000;
 
@@ -20,6 +22,7 @@ fn usage(windows: Vec<UsageWindow>, note: Option<&str>) -> ProviderUsage {
         account_label: None,
         windows,
         note: note.map(str::to_string),
+        resets: None,
     }
 }
 
@@ -133,4 +136,125 @@ fn an_account_with_nothing_to_measure_falls_back_to_its_note() {
 fn nothing_to_report_and_no_note_renders_nothing() {
     let report = usage(vec![window("Credit", None, None)], None);
     assert_eq!(usage_detail(&report, NOW), None);
+}
+
+fn with_resets(usage: ProviderUsage, available: u32, expires_at: Option<i64>) -> ProviderUsage {
+    ProviderUsage {
+        resets: Some(LimitResets {
+            available,
+            expires_at,
+        }),
+        ..usage
+    }
+}
+
+#[test]
+fn banked_resets_follow_the_windows() {
+    let report = with_resets(
+        usage(
+            vec![window("5h", Some(0), Some(NOW + 2 * 3600 + 14 * 60))],
+            None,
+        ),
+        2,
+        Some(NOW + 6 * 86_400 + 4 * 3600),
+    );
+    assert_eq!(
+        usage_detail(&report, NOW).as_deref(),
+        Some("5h 0% left (resets in 2h 14m) · 2 resets available (next expires in 6d 4h)")
+    );
+}
+
+#[test]
+fn a_single_reset_without_a_date_reads_in_the_singular() {
+    let report = with_resets(usage(vec![window("Wk", Some(40), None)], None), 1, None);
+    assert_eq!(
+        usage_detail(&report, NOW).as_deref(),
+        Some("Wk 40% left · 1 reset available")
+    );
+}
+
+#[test]
+fn zero_resets_add_nothing_to_the_line() {
+    let report = with_resets(usage(vec![window("Wk", Some(40), None)], None), 0, None);
+    assert_eq!(usage_detail(&report, NOW).as_deref(), Some("Wk 40% left"));
+}
+
+#[test]
+fn a_label_from_the_config_file_follows_the_provider_name() {
+    assert_eq!(account_name("codex", Some("work")), "codex (work)");
+    assert_eq!(account_name("codex", None), "codex");
+}
+
+fn report(label: Option<&str>, result: Result<ProviderUsage, ProviderError>) -> AccountReport {
+    AccountReport {
+        provider: "cursor",
+        label: label.map(str::to_string),
+        result,
+    }
+}
+
+#[test]
+fn the_text_report_leaves_out_providers_that_are_not_set_up_unless_asked() {
+    let missing = report(
+        None,
+        Err(ProviderError::new("No Cursor credentials found.", true)),
+    );
+    assert!(!shown_in_text(&missing, NOW, false));
+    assert!(shown_in_text(&missing, NOW, true));
+
+    let blank = report(None, Ok(usage(vec![window("Plan", None, None)], None)));
+    assert!(!shown_in_text(&blank, NOW, false));
+
+    // A real failure is worth seeing, and so is anything the file asked for.
+    let failed = report(
+        None,
+        Err(ProviderError::new("Cursor rejected the token.", false)),
+    );
+    assert!(shown_in_text(&failed, NOW, false));
+
+    let configured = report(
+        Some("work"),
+        Err(ProviderError::new("No login in ~/x.", true)),
+    );
+    assert!(shown_in_text(&configured, NOW, false));
+}
+
+#[test]
+fn json_records_keep_every_field_and_say_why_a_login_has_no_numbers() {
+    let missing = report(
+        None,
+        Err(ProviderError::new("No Cursor credentials found.", true)),
+    );
+    let value = serde_json::to_value(usage_record(&missing)).expect("json");
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "provider": "cursor",
+            "label": null,
+            "status": "not_configured",
+            "accountLabel": null,
+            "windows": [],
+            "note": null,
+            "resets": null,
+            "error": "No Cursor credentials found."
+        })
+    );
+
+    let working = report(
+        Some("work"),
+        Ok(with_resets(
+            usage(vec![window("5h", Some(80), Some(NOW))], None),
+            2,
+            None,
+        )),
+    );
+    let value = serde_json::to_value(usage_record(&working)).expect("json");
+    assert_eq!(value["status"], "ok");
+    assert_eq!(value["label"], "work");
+    assert_eq!(value["windows"][0]["remainingPercent"], 80);
+    assert_eq!(
+        value["resets"],
+        serde_json::json!({ "available": 2, "expiresAt": null })
+    );
+    assert_eq!(value["error"], serde_json::Value::Null);
 }

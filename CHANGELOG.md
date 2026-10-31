@@ -4,6 +4,18 @@ All notable changes to this project will be documented here.
 
 ## Unreleased
 
+### 🖥️ quota-cli
+
+- `usage` leaves out providers you are not signed into, and logins with nothing to show. `--all` lists them again, with the reason.
+- `usage --json` now has one record per login, including the ones without a login, with `status` (`ok`, `not_configured`, `error`), `label`, `resets`, and `error` on every record.
+- Banked limit resets show for Codex (`rate_limit_reset_credits`) and Claude (the `cedar_ember` grants, with their end date). Claude only reports these to a `claude-cli/` user agent, so the Claude usage call now sends `claude-cli/<version> (external, cli) quota/<version>`.
+- An optional config file, `~/.config/quota-cli/config.toml`, lists more Claude logins (by `CLAUDE_CONFIG_DIR`) and Codex logins (by `CODEX_HOME`), each with a label. The login each CLI is using now is merged with a configured entry for the same account.
+- The Claude reader honors `CLAUDE_CONFIG_DIR`, including the Keychain item Claude Code names after it.
+
+### 🔒 Security
+
+- `quota-cli/Cargo.lock` moves rustls to 0.23.46, rustls-webpki to 0.103.16, webpki-roots to 1.0.11, and tokio to 1.54.1 for RUSTSEC-2026-0381, RUSTSEC-2026-0382, RUSTSEC-2026-0285, RUSTSEC-2026-0346 to RUSTSEC-2026-0349, and RUSTSEC-2026-0386.
+
 ### 🌐 Website
 
 - Added `website/`, a homepage and docs site built with Astro and Starlight. It covers the desktop app, the VS Code extension, `quota-cli`, and the Herdr plugin, with screenshots, install steps, and direct download links for each release.

@@ -10,6 +10,16 @@ pub struct UsageWindow {
     pub reset_at: Option<i64>,
 }
 
+/// Usage-limit resets the account has banked. Each one refills a usage window
+/// once, at a moment the user picks, instead of waiting for it to roll over.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LimitResets {
+    pub available: u32,
+    /// When the soonest-expiring reset lapses, when the provider says.
+    pub expires_at: Option<i64>,
+}
+
 /// Normalized usage for one provider account. Windows are ordered shortest
 /// first, so the compact token reads "5h ... then Wk ...".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -24,6 +34,10 @@ pub struct ProviderUsage {
     /// pane, and the user cannot tell which one they are looking at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Banked limit resets. `None` when the provider has no such thing or did
+    /// not say, which is different from a reported zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets: Option<LimitResets>,
 }
 
 impl ProviderUsage {

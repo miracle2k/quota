@@ -5,12 +5,149 @@
 //! CLI, so an expired token is reported rather than renewed.
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// Where the Claude Code CLI writes its credentials.
+/// Where the Claude Code CLI writes its credentials. `CLAUDE_CONFIG_DIR`
+/// relocates it.
 pub fn local_credentials_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".claude").join(".credentials.json"))
+    ClaudeLogin::current().map(|login| login.credentials_path())
+}
+
+/// One place Claude Code keeps a login: a config directory, plus the Keychain
+/// item it uses for that directory on macOS.
+///
+/// Claude Code treats the default directory and one chosen through
+/// `CLAUDE_CONFIG_DIR` differently. The default login lives in the plain
+/// Keychain item and records its account in `~/.claude.json`. A login made with
+/// `CLAUDE_CONFIG_DIR` gets a Keychain item named after a hash of that variable's
+/// value, and records its account inside the directory itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeLogin {
+    config_dir: PathBuf,
+    /// The `CLAUDE_CONFIG_DIR` value, or `None` for the default directory.
+    config_dir_override: Option<String>,
+}
+
+impl ClaudeLogin {
+    /// The login Claude Code would use in this environment.
+    pub fn current() -> Option<Self> {
+        match std::env::var("CLAUDE_CONFIG_DIR") {
+            Ok(value) if !value.is_empty() => Some(Self::for_config_dir(&value)),
+            _ => Self::default_dir(),
+        }
+    }
+
+    /// The login in `~/.claude`, used when `CLAUDE_CONFIG_DIR` is not set.
+    pub fn default_dir() -> Option<Self> {
+        dirs::home_dir().map(|home| Self {
+            config_dir: home.join(".claude"),
+            config_dir_override: None,
+        })
+    }
+
+    /// The login Claude Code keeps when started with
+    /// `CLAUDE_CONFIG_DIR=<config_dir>`. Pass the value exactly as it is set
+    /// there: Claude Code names the Keychain item after that text, so a
+    /// trailing slash or an unexpanded `~` names a different item.
+    pub fn for_config_dir(config_dir: &str) -> Self {
+        Self {
+            config_dir: PathBuf::from(config_dir),
+            config_dir_override: Some(config_dir.to_string()),
+        }
+    }
+
+    pub fn config_dir(&self) -> &Path {
+        &self.config_dir
+    }
+
+    pub fn credentials_path(&self) -> PathBuf {
+        self.config_dir.join(".credentials.json")
+    }
+
+    /// The Keychain service Claude Code stores this login under on macOS.
+    pub fn keychain_service(&self) -> String {
+        match &self.config_dir_override {
+            Some(config_dir) => keychain_service_for_config_dir(config_dir),
+            None => KEYCHAIN_SERVICE.to_string(),
+        }
+    }
+
+    /// The `.claude.json` file where Claude Code records the signed-in account.
+    pub fn account_file_path(&self) -> Option<PathBuf> {
+        match &self.config_dir_override {
+            Some(_) => Some(self.config_dir.join(".claude.json")),
+            None => dirs::home_dir().map(|home| home.join(".claude.json")),
+        }
+    }
+
+    /// Read this login: the credentials file first, then the Keychain item on
+    /// macOS, where Claude Code does not write the file at all.
+    pub fn read_credentials(&self) -> Result<LocalClaudeCredentials, LocalCredentialError> {
+        let file_result = read_local_credentials_at(&self.credentials_path());
+
+        #[cfg(target_os = "macos")]
+        if matches!(file_result, Err(LocalCredentialError::NotFound)) {
+            return read_keychain_credentials(&self.keychain_service());
+        }
+
+        file_result
+    }
+
+    /// Which account this login is signed in as, so two directories holding
+    /// the same account can be told apart from two different accounts. `None`
+    /// when Claude Code has not recorded it.
+    pub fn account_identity(&self) -> Option<String> {
+        let raw = std::fs::read_to_string(self.account_file_path()?).ok()?;
+        parse_account_identity(&raw)
+    }
+}
+
+/// The Keychain service Claude Code uses for a login made with
+/// `CLAUDE_CONFIG_DIR`: the plain service name plus the first eight hex digits
+/// of the SHA-256 of the variable's value.
+///
+/// Claude Code normalizes the value to Unicode NFC before hashing. This does
+/// not, which only matters for a directory path with non-ASCII characters.
+pub fn keychain_service_for_config_dir(config_dir: &str) -> String {
+    let digest = Sha256::digest(config_dir.as_bytes());
+    let prefix: String = digest
+        .iter()
+        .take(4)
+        .map(|byte| format!("{:02x}", byte))
+        .collect();
+    format!("{}-{}", KEYCHAIN_SERVICE, prefix)
+}
+
+/// Pull the signed-in account out of a `.claude.json` file as
+/// `<organization uuid>:<account uuid>`. The organization is part of it because
+/// one person can sign in to a personal and a team organization, and each has
+/// its own limits.
+pub fn parse_account_identity(raw: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct AccountFile {
+        #[serde(rename = "oauthAccount")]
+        oauth_account: Option<OauthAccount>,
+    }
+
+    #[derive(Deserialize)]
+    struct OauthAccount {
+        #[serde(rename = "accountUuid")]
+        account_uuid: Option<String>,
+        #[serde(rename = "organizationUuid")]
+        organization_uuid: Option<String>,
+    }
+
+    let account = serde_json::from_str::<AccountFile>(raw)
+        .ok()?
+        .oauth_account?;
+    let account_uuid = account.account_uuid.filter(|uuid| !uuid.is_empty())?;
+    Some(format!(
+        "{}:{}",
+        account.organization_uuid.unwrap_or_default(),
+        account_uuid
+    ))
 }
 
 #[derive(Clone)]
@@ -140,31 +277,26 @@ pub fn parse_credentials_json(raw: &str) -> Result<LocalClaudeCredentials, Local
 /// does not write the credentials file at all.
 pub const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
-/// Read the default path, falling back to the Keychain on macOS when the file
-/// is missing.
+/// Read the login Claude Code would use in this environment, falling back to
+/// the Keychain on macOS when the file is missing.
 pub fn read_local_credentials() -> Result<LocalClaudeCredentials, LocalCredentialError> {
-    let path = local_credentials_path()
-        .ok_or_else(|| LocalCredentialError::Unreadable("no home directory".to_string()))?;
-    let file_result = read_local_credentials_at(&path);
-
-    #[cfg(target_os = "macos")]
-    if matches!(file_result, Err(LocalCredentialError::NotFound)) {
-        return read_keychain_credentials();
-    }
-
-    file_result
+    ClaudeLogin::current()
+        .ok_or_else(|| LocalCredentialError::Unreadable("no home directory".to_string()))?
+        .read_credentials()
 }
 
 /// Read the Keychain item through `/usr/bin/security`. Claude Code writes the
 /// item with that same tool, so its access list already allows this read and
 /// no unlock prompt appears. Read-only: nothing is ever stored or deleted.
 #[cfg(target_os = "macos")]
-fn read_keychain_credentials() -> Result<LocalClaudeCredentials, LocalCredentialError> {
+fn read_keychain_credentials(
+    service: &str,
+) -> Result<LocalClaudeCredentials, LocalCredentialError> {
     // `security` exits with 44 when no item matches the service.
     const ITEM_NOT_FOUND: i32 = 44;
 
     let output = std::process::Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
+        .args(["find-generic-password", "-s", service, "-w"])
         .output()
         .map_err(|err| LocalCredentialError::Unreadable(err.to_string()))?;
 

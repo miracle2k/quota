@@ -10,7 +10,7 @@ pub const MIN_WATCH_INTERVAL_SECS: u64 = (DEFAULT_TTL_MS / 1000) as u64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    Usage { json: bool },
+    Usage { json: bool, all: bool },
     HerdrReport { force: bool },
     HerdrWatch { interval_secs: u64 },
     Help,
@@ -20,10 +20,17 @@ pub const HELP: &str = "\
 quota-cli — read AI usage from locally stored agent CLI credentials
 
 Usage:
-  quota-cli usage [--json]    Print current usage
-  quota-cli herdr report      Push usage tokens into the Herdr sidebar
-  quota-cli herdr watch       Keep reporting on an interval until stopped
-  quota-cli --help            Show this help
+  quota-cli usage [--json] [--all]   Print current usage
+  quota-cli herdr report             Push usage tokens into the Herdr sidebar
+  quota-cli herdr watch              Keep reporting on an interval until stopped
+  quota-cli --help                   Show this help
+
+Options for usage:
+  --json   Print one JSON record per login, including the ones not set up
+  --all    Also list providers with no login here, and the reason
+
+Extra Claude and Codex logins go in ~/.config/quota-cli/config.toml
+(or the file QUOTA_CLI_CONFIG names). See the README for the format.
 ";
 
 pub fn parse_args(argv: &[String]) -> Result<Command, String> {
@@ -35,13 +42,15 @@ pub fn parse_args(argv: &[String]) -> Result<Command, String> {
         "--help" | "-h" | "help" => Ok(Command::Help),
         "usage" => {
             let mut json = false;
+            let mut all = false;
             for flag in &argv[1..] {
                 match flag.as_str() {
                     "--json" => json = true,
+                    "--all" => all = true,
                     other => return Err(format!("unknown flag: {}", other)),
                 }
             }
-            Ok(Command::Usage { json })
+            Ok(Command::Usage { json, all })
         }
         "herdr" => match argv.get(1).map(String::as_str) {
             Some("report") => {

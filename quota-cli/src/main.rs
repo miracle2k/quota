@@ -15,30 +15,31 @@ async fn main() {
 
     match command {
         Command::Help => println!("{}", HELP),
-        Command::Usage { json } => run_usage(json).await,
+        Command::Usage { json, all } => run_usage(json, all).await,
         Command::HerdrReport { force } => run_herdr_report(force).await,
         Command::HerdrWatch { interval_secs } => run_herdr_watch(interval_secs).await,
     }
 }
 
-async fn run_usage(json: bool) {
-    let reports = quota_core::providers::fetch_all().await;
+async fn run_usage(json: bool, all: bool) {
+    use quota_cli::render;
 
-    let succeeded: Vec<_> = reports
-        .iter()
-        .filter_map(|(_, result)| result.as_ref().ok())
-        .collect();
+    let config = match quota_cli::config::load() {
+        Ok(config) => config,
+        Err(message) => {
+            eprintln!("config: {}", message);
+            std::process::exit(2);
+        }
+    };
+
+    let reports = quota_cli::accounts::fetch_all(&config).await;
+    let any_succeeded = reports.iter().any(|report| report.result.is_ok());
 
     if json {
-        // The JSON shape stays an array of usage records. A provider the user
-        // is not signed into is not a record, so its message goes to stderr
-        // rather than into a payload something else is parsing.
-        for (name, result) in &reports {
-            if let Err(message) = result {
-                eprintln!("{}: {}", name, message);
-            }
-        }
-        match serde_json::to_string_pretty(&succeeded) {
+        // Every login checked is a record, including the ones that failed or
+        // are not set up, so a script can tell which is which from `status`.
+        let records: Vec<_> = reports.iter().map(render::usage_record).collect();
+        match serde_json::to_string_pretty(&records) {
             Ok(rendered) => println!("{}", rendered),
             Err(err) => {
                 eprintln!("could not render JSON: {}", err);
@@ -46,12 +47,6 @@ async fn run_usage(json: bool) {
             }
         }
     } else {
-        let width = reports
-            .iter()
-            .map(|(name, _)| name.len())
-            .max()
-            .unwrap_or(0);
-
         // One clock reading for the whole report, so two windows that reset at
         // the same moment cannot render as different durations.
         let now = std::time::SystemTime::now()
@@ -59,20 +54,39 @@ async fn run_usage(json: bool) {
             .map(|elapsed| elapsed.as_secs() as i64)
             .unwrap_or(0);
 
-        for (name, result) in &reports {
-            let detail = match result {
-                Ok(usage) => quota_cli::render::usage_detail(usage, now)
+        let shown: Vec<_> = reports
+            .iter()
+            .filter(|report| render::shown_in_text(report, now, all))
+            .map(|report| {
+                (
+                    render::account_name(report.provider, report.label.as_deref()),
+                    report,
+                )
+            })
+            .collect();
+
+        let width = shown.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
+
+        for (name, report) in &shown {
+            let detail = match &report.result {
+                Ok(usage) => render::usage_detail(usage, now)
                     .unwrap_or_else(|| "no usage numbers reported".to_string()),
-                Err(message) => message.clone(),
+                Err(err) => err.message.clone(),
             };
             println!("{:<width$}  {}", name, detail, width = width);
+        }
+
+        if shown.is_empty() {
+            eprintln!(
+                "No provider has a login here. Run `quota-cli usage --all` to see each reason."
+            );
         }
     }
 
     // Any provider reporting is a useful run. Exiting non-zero because one
     // provider the user never signed into failed would make the command look
     // broken on a machine where it is working fine.
-    if succeeded.is_empty() {
+    if !any_succeeded {
         std::process::exit(1);
     }
 }
