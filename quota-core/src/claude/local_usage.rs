@@ -34,6 +34,7 @@ pub fn normalize_usage_response(raw: &Value, account_label: Option<String>) -> P
         ],
         note: None,
         resets: limit_resets(raw.get("cedar_ember")),
+        balance: None,
     }
 }
 
@@ -54,7 +55,10 @@ fn limit_resets(block: Option<&Value>) -> Option<LimitResets> {
     let mut expires_at: Option<i64> = None;
     let grants = block.get("grants").and_then(Value::as_array);
     for grant in grants.into_iter().flatten() {
-        let left = grant.get("resets_left").and_then(Value::as_u64).unwrap_or(0);
+        let left = grant
+            .get("resets_left")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         if left == 0 {
             continue;
         }
@@ -117,13 +121,59 @@ impl std::fmt::Display for LocalUsageError {
                 formatter,
                 "Claude rejected the stored token. Run the Claude Code CLI to refresh it."
             ),
-            Self::Forbidden => write!(
-                formatter,
-                "Claude refused the usage request (HTTP 403)."
-            ),
+            Self::Forbidden => write!(formatter, "Claude refused the usage request (HTTP 403)."),
             Self::Request(detail) => write!(formatter, "Claude usage request failed: {}", detail),
         }
     }
+}
+
+/// Claude's account endpoint, which names the account a token belongs to.
+const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
+
+/// Which account an OAuth access token belongs to, for a login whose files do
+/// not say, such as the one pi keeps.
+pub async fn fetch_account(
+    access_token: &str,
+) -> Result<super::local::AccountInfo, LocalUsageError> {
+    let response = reqwest::Client::new()
+        .get(PROFILE_URL)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", access_token),
+        )
+        .header("anthropic-beta", BETA_HEADER)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .send()
+        .await
+        .map_err(|err| LocalUsageError::Request(err.to_string()))?;
+    match response.status().as_u16() {
+        401 => return Err(LocalUsageError::Unauthorized),
+        403 => return Err(LocalUsageError::Forbidden),
+        status if !(200..300).contains(&status) => {
+            return Err(LocalUsageError::Request(format!("status={}", status)))
+        }
+        _ => {}
+    }
+    let raw: Value = response
+        .json()
+        .await
+        .map_err(|err| LocalUsageError::Request(err.to_string()))?;
+    let text = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    };
+    Ok(super::local::AccountInfo {
+        account_uuid: text(raw.get("account").and_then(|account| account.get("uuid"))),
+        organization_uuid: text(raw.get("organization").and_then(|org| org.get("uuid"))),
+        email: text(raw.get("account").and_then(|account| {
+            account
+                .get("email_address")
+                .or_else(|| account.get("email"))
+        })),
+    })
 }
 
 /// Read local credentials and fetch current usage. Never writes to disk.

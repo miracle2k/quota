@@ -14,6 +14,7 @@ fn compact_token_joins_the_first_two_windows() {
         provider: "claude".to_string(),
         account_label: None,
         resets: None,
+        balance: None,
         note: None,
         windows: vec![window("5h", Some(89)), window("Wk", Some(57))],
     };
@@ -26,6 +27,7 @@ fn compact_token_skips_windows_with_no_number() {
         provider: "claude".to_string(),
         account_label: None,
         resets: None,
+        balance: None,
         note: None,
         windows: vec![window("5h", Some(89)), window("Wk", None)],
     };
@@ -38,6 +40,7 @@ fn compact_token_is_none_when_nothing_is_known() {
         provider: "claude".to_string(),
         account_label: None,
         resets: None,
+        balance: None,
         note: None,
         windows: vec![window("5h", None)],
     };
@@ -50,6 +53,7 @@ fn compact_token_uses_at_most_two_windows() {
         provider: "claude".to_string(),
         account_label: None,
         resets: None,
+        balance: None,
         note: None,
         windows: vec![
             window("5h", Some(89)),
@@ -68,6 +72,7 @@ fn compact_token_falls_back_to_the_note_when_no_window_has_a_number() {
         provider: "grok".to_string(),
         account_label: None,
         resets: None,
+        balance: None,
         windows: vec![window("Credit", None)],
         note: Some("no credit allocation".to_string()),
     };
@@ -83,6 +88,7 @@ fn a_real_number_always_wins_over_the_note() {
         provider: "grok".to_string(),
         account_label: None,
         resets: None,
+        balance: None,
         windows: vec![window("Credit", Some(64))],
         note: Some("no credit allocation".to_string()),
     };

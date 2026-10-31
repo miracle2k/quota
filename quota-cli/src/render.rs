@@ -4,13 +4,13 @@
 //! percent-only. A terminal has room, so the text report labels each percent
 //! as what's left, like the desktop app's default, and spells out the reset time.
 
-use crate::accounts::{AccountReport, ListedAccount, Login};
-use quota_core::usage::{LimitResets, ProviderUsage, UsageWindow};
+use crate::accounts::{AccountReport, ListedAccount, Login, Store};
+use quota_core::usage::{Balance, LimitResets, ProviderUsage, UsageWindow};
 use serde::Serialize;
 
 /// Render one provider's detail line: every window that reports a percent,
-/// plus how long until it rolls over when the provider tells us, and any
-/// banked limit resets.
+/// plus how long until it rolls over when the provider tells us, any banked
+/// limit resets, and a prepaid balance.
 ///
 /// `None` when there is nothing at all to say, matching `compact_token` so the
 /// caller keeps one fallback.
@@ -31,6 +31,7 @@ pub fn usage_detail(usage: &ProviderUsage, now: i64) -> Option<String> {
             })
         })
         .collect();
+    let has_windows = !parts.is_empty();
 
     if let Some(resets) = usage
         .resets
@@ -39,12 +40,18 @@ pub fn usage_detail(usage: &ProviderUsage, now: i64) -> Option<String> {
     {
         parts.push(resets);
     }
+    if let Some(balance) = &usage.balance {
+        parts.push(format!("{} balance", balance.display()));
+    }
 
     if parts.is_empty() {
-        usage.note.clone()
-    } else {
-        Some(parts.join(" · "))
+        return usage.note.clone();
     }
+    // Without windows the note explains why, as in "No GLM Coding Plan".
+    if !has_windows {
+        parts.extend(usage.note.clone());
+    }
+    Some(parts.join(" · "))
 }
 
 /// The name a report line starts with: the provider, plus the account's label
@@ -97,6 +104,7 @@ pub struct UsageRecord<'a> {
     pub windows: &'a [UsageWindow],
     pub note: Option<&'a str>,
     pub resets: Option<&'a LimitResets>,
+    pub balance: Option<&'a Balance>,
     pub error: Option<&'a str>,
 }
 
@@ -111,6 +119,7 @@ pub fn usage_record(report: &AccountReport) -> UsageRecord<'_> {
         windows: &[],
         note: None,
         resets: None,
+        balance: None,
         error: None,
     };
     match &report.result {
@@ -119,6 +128,7 @@ pub fn usage_record(report: &AccountReport) -> UsageRecord<'_> {
             windows: &usage.windows,
             note: usage.note.as_deref(),
             resets: usage.resets.as_ref(),
+            balance: usage.balance.as_ref(),
             ..base
         },
         Err(err) => UsageRecord {
@@ -182,10 +192,11 @@ pub fn account_list(accounts: &[ListedAccount]) -> String {
 
 /// The login's address, or why it cannot be used.
 fn login_state(login: &Login) -> String {
-    match &login.problem {
-        Some(problem) if problem.not_configured => "not signed in".to_string(),
-        Some(_) => "unusable (`usage` says why)".to_string(),
-        None => login
+    match (&login.problem, &login.store) {
+        (Some(problem), _) if problem.not_configured => "not signed in".to_string(),
+        (Some(_), _) => "unusable (`usage` says why)".to_string(),
+        (None, Store::Zai(..)) => "API key".to_string(),
+        (None, _) => login
             .email
             .clone()
             .unwrap_or_else(|| "signed in".to_string()),

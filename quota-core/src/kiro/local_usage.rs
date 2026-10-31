@@ -110,6 +110,7 @@ pub fn normalize_usage_response(raw: &Value, account_label: Option<String>) -> P
         windows,
         note: None,
         resets: None,
+        balance: None,
     }
 }
 

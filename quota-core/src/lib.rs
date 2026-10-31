@@ -4,6 +4,7 @@
 pub mod fs_util;
 pub(crate) mod http_error;
 pub mod local_paths;
+pub mod pi;
 pub mod providers;
 pub mod usage;
 pub mod antigravity;
@@ -12,3 +13,4 @@ pub mod codex;
 pub mod cursor;
 pub mod grok;
 pub mod kiro;
+pub mod zai;

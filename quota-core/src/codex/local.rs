@@ -54,7 +54,10 @@ impl fmt::Debug for LocalCodexCredentials {
             .field("account_id", &self.account_id)
             .field("email", &self.email)
             .field("plan", &self.plan)
-            .field("access_token_expires_at_ms", &self.access_token_expires_at_ms)
+            .field(
+                "access_token_expires_at_ms",
+                &self.access_token_expires_at_ms,
+            )
             .finish()
     }
 }
@@ -198,6 +201,35 @@ pub fn read_local_credentials_at(path: &Path) -> Result<LocalCodexCredentials, L
         plan,
         access_token_expires_at_ms,
     })
+}
+
+/// Credentials from an access token alone, such as the Codex login pi keeps.
+/// The token is a JWT that names the account, its address and its plan.
+pub fn credentials_from_access_token(
+    access_token: &str,
+    account_id: Option<String>,
+) -> LocalCodexCredentials {
+    let claims = decode_jwt_claims(access_token).ok();
+    let auth_data = claims.as_ref().and_then(|claims| claims.auth_data.as_ref());
+    LocalCodexCredentials {
+        access_token: access_token.to_string(),
+        account_id: normalize(account_id).or_else(|| {
+            auth_data.and_then(|data| {
+                normalize(data.chatgpt_account_id.clone())
+                    .or_else(|| normalize(data.account_id.clone()))
+            })
+        }),
+        email: claims.as_ref().and_then(|claims| {
+            normalize(claims.email.clone()).or_else(|| {
+                claims
+                    .profile_data
+                    .as_ref()
+                    .and_then(|profile| normalize(profile.email.clone()))
+            })
+        }),
+        plan: auth_data.and_then(|data| normalize(data.chatgpt_plan_type.clone())),
+        access_token_expires_at_ms: jwt_expiry(access_token).map(|at| at.timestamp_millis()),
+    }
 }
 
 /// The `exp` claim of a JWT, without checking its signature. `None` when the

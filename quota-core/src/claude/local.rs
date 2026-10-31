@@ -180,8 +180,11 @@ impl CredentialStore {
         match self {
             Self::File(_) => true,
             Self::Keychain { service, account } => {
-                keychain_command_len(service, account.as_deref().unwrap_or("claude-code-user"), secret_len)
-                    <= KEYCHAIN_COMMAND_LIMIT
+                keychain_command_len(
+                    service,
+                    account.as_deref().unwrap_or("claude-code-user"),
+                    secret_len,
+                ) <= KEYCHAIN_COMMAND_LIMIT
             }
         }
     }
@@ -431,7 +434,10 @@ fn keychain_account() -> Option<String> {
 /// item with that same tool, so its access list already allows this read and
 /// no unlock prompt appears.
 #[cfg(target_os = "macos")]
-fn read_keychain_item(service: &str, account: Option<&str>) -> Result<String, LocalCredentialError> {
+fn read_keychain_item(
+    service: &str,
+    account: Option<&str>,
+) -> Result<String, LocalCredentialError> {
     // `security` exits with 44 when no item matches.
     const ITEM_NOT_FOUND: i32 = 44;
 
@@ -448,7 +454,9 @@ fn read_keychain_item(service: &str, account: Option<&str>) -> Result<String, Lo
     if !output.status.success() {
         return Err(match output.status.code() {
             Some(ITEM_NOT_FOUND) => LocalCredentialError::NotFound,
-            _ => LocalCredentialError::Unreadable(format!("security exited with {}", output.status)),
+            _ => {
+                LocalCredentialError::Unreadable(format!("security exited with {}", output.status))
+            }
         });
     }
 
@@ -479,7 +487,9 @@ pub(crate) fn write_keychain_item(
         return Err("unexpected quote in Keychain item name".to_string());
     }
     if keychain_command_len(service, &account, secret.len()) > KEYCHAIN_COMMAND_LIMIT {
-        return Err("the login is too long to hand to `security` without a command line".to_string());
+        return Err(
+            "the login is too long to hand to `security` without a command line".to_string(),
+        );
     }
     let hex: String = secret.bytes().map(|byte| format!("{:02x}", byte)).collect();
     let line = format!(

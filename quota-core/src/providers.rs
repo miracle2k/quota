@@ -10,7 +10,15 @@ use crate::usage::ProviderUsage;
 /// Every provider the CLI can read, in the order it lists them. Shortest
 /// windows first is a per-provider concern; this order is just the reading
 /// order of the report.
-pub const PROVIDERS: &[&str] = &["claude", "codex", "cursor", "antigravity", "grok", "kiro"];
+pub const PROVIDERS: &[&str] = &[
+    "claude",
+    "codex",
+    "cursor",
+    "antigravity",
+    "grok",
+    "kiro",
+    "zai",
+];
 
 /// Why a provider produced no usage.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +64,7 @@ pub async fn fetch_provider(name: &str) -> Option<Result<ProviderUsage, Provider
         }
         "grok" => flatten_error!(crate::grok::local_usage::fetch_local_usage().await),
         "kiro" => flatten_error!(crate::kiro::local_usage::fetch_local_usage().await),
+        "zai" => flatten_error!(crate::zai::fetch_local_usage().await),
         _ => return None,
     };
     Some(result)

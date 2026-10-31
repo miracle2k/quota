@@ -49,10 +49,8 @@ fn parses_extra_claude_and_codex_logins() {
 
 #[test]
 fn providers_can_be_skipped_or_shown_only_when_they_work() {
-    let config = parse(
-        "[usage]\nskip = [\"kiro\"]\nhide_errors = [\"antigravity\", \"cursor\"]\n",
-    )
-    .expect("parse");
+    let config = parse("[usage]\nskip = [\"kiro\"]\nhide_errors = [\"antigravity\", \"cursor\"]\n")
+        .expect("parse");
     assert_eq!(config.usage.skip, vec!["kiro".to_string()]);
     assert!(config.usage.hides_errors_of("antigravity"));
     assert!(!config.usage.hides_errors_of("claude"));
@@ -68,6 +66,7 @@ fn other_tools_are_read_unless_turned_off() {
     let config = parse("").expect("parse");
     assert!(config.sources.codexbar);
     assert!(config.sources.claude_swap);
+    assert!(config.sources.pi);
 
     let config = parse("[sources]\nclaude_swap = false\n").expect("parse");
     assert!(config.sources.codexbar);

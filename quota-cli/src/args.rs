@@ -48,7 +48,8 @@ Usage:
   quota-cli usage [--json] [--all] [PROVIDER...]
                                      Print current usage, for some providers only
                                      when named (claude, codex, cursor, ...)
-  quota-cli accounts [list] [--json] List every Claude and Codex login found
+  quota-cli accounts [list] [--json] List every login found for providers that
+                                     can have several accounts
   quota-cli accounts add claude|codex LABEL [--device-auth]
                                      Sign in to another account and keep it
   quota-cli accounts remove claude|codex LABEL
@@ -61,9 +62,9 @@ Options for usage:
   --json   Print one JSON record per account, including the ones not set up
   --all    Also list providers with no login here, and the reason
 
-Claude and Codex accounts are found in several places: the login each CLI
-uses now, the accounts `accounts add` made, the config file, CodexBar and
-claude-swap. Each account is shown once.
+Claude, Codex, Antigravity and Z.ai accounts are found in several places:
+the login each CLI uses now, the accounts `accounts add` made, the config
+file, CodexBar, claude-swap and pi. Each account is shown once.
 
 quota-cli keeps the accounts it adds in its data directory (on macOS
 ~/Library/Application Support/quota-cli; QUOTA_CLI_DATA_DIR moves it).

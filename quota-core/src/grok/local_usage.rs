@@ -55,6 +55,7 @@ pub fn normalize_billing_response(raw: &Value, account_label: Option<String>) ->
         }],
         note,
         resets: None,
+        balance: None,
     }
 }
 

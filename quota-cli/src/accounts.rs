@@ -1,12 +1,14 @@
 //! Which logins `usage` reports on, and how each one is fetched.
 //!
-//! Claude and Codex logins come from several places, in this order:
+//! Claude, Codex, Antigravity and Z.ai logins come from several places, in
+//! this order:
 //!
-//! 1. the login each provider's own CLI uses now;
+//! 1. the login each provider's own CLI uses now (for Z.ai, `ZAI_API_KEY`);
 //! 2. quota-cli's own accounts, made with `quota-cli accounts add`;
 //! 3. the config file;
 //! 4. CodexBar's Codex accounts;
-//! 5. claude-swap's Claude accounts.
+//! 5. claude-swap's Claude accounts;
+//! 6. the pi coding agent's logins.
 //!
 //! The same account often turns up in more than one place, so logins are
 //! grouped by account before anything is fetched, and each account is reported
@@ -16,9 +18,12 @@
 use crate::config::{expand_home, Config};
 use crate::store::Registry;
 use crate::{claude_swap, codexbar};
+use quota_core::antigravity::local::LocalAntigravityCredentials;
+use quota_core::claude::local::LocalClaudeCredentials;
 use quota_core::claude::local::{ClaudeLogin, LocalCredentialError as ClaudeCredentialError};
 use quota_core::claude::local_usage::LocalUsageError as ClaudeUsageError;
 use quota_core::claude::refresh as claude_refresh;
+use quota_core::codex::local::LocalCodexCredentials;
 use quota_core::codex::local::{
     credentials_path_in, read_local_credentials_at, LocalCredentialError as CodexCredentialError,
 };
@@ -26,7 +31,11 @@ use quota_core::codex::local_usage::LocalUsageError as CodexUsageError;
 use quota_core::codex::refresh as codex_refresh;
 use quota_core::providers::{ProviderError, PROVIDERS};
 use quota_core::usage::ProviderUsage;
+use quota_core::zai::Region as ZaiRegion;
 use std::path::{Path, PathBuf};
+
+/// The providers whose logins can come from more than one place.
+pub const MULTI_LOGIN_PROVIDERS: &[&str] = &["claude", "codex", "antigravity", "zai"];
 
 /// Where a login was found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +48,8 @@ pub enum Source {
     Config,
     CodexBar,
     ClaudeSwap,
+    /// The pi coding agent's `auth.json`.
+    Pi,
 }
 
 impl Source {
@@ -49,6 +60,7 @@ impl Source {
             Self::Config => "config",
             Self::CodexBar => "codexbar",
             Self::ClaudeSwap => "claude-swap",
+            Self::Pi => "pi",
         }
     }
 
@@ -68,6 +80,34 @@ pub enum Store {
     Codex(PathBuf),
     /// Usage another tool measured. quota has no credentials for it.
     Reported(Result<ProviderUsage, ProviderError>),
+    /// A Claude or Codex access token another tool owns, such as pi's. It is
+    /// used while it is good and never renewed here: the tool keeps the
+    /// refresh token, and a Claude or Codex refresh token works only once.
+    ClaudeToken(LocalClaudeCredentials),
+    CodexToken(LocalCodexCredentials),
+    /// A Google login for Antigravity. Google renews the access token without
+    /// replacing the refresh token, so it is renewed in memory when needed.
+    Antigravity(Box<LocalAntigravityCredentials>),
+    /// A Z.ai API key.
+    Zai(ApiKey, ZaiRegion),
+}
+
+impl Store {
+    /// Whether an expired token here can be renewed without writing anything,
+    /// so that trying it costs no other copy of the login its refresh token.
+    fn renews_in_memory(&self) -> bool {
+        matches!(self, Self::Antigravity(_) | Self::Zai(..))
+    }
+}
+
+/// An API key, kept out of `Debug` output.
+#[derive(Clone)]
+pub struct ApiKey(pub String);
+
+impl std::fmt::Debug for ApiKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ApiKey(<redacted>)")
+    }
 }
 
 /// One login, as found before anything is fetched.
@@ -118,6 +158,10 @@ impl Login {
         let label = self.label.as_deref().unwrap_or_default();
         match (self.source, self.provider) {
             (Source::Current, "claude") => "Sign in again with: claude auth login".to_string(),
+            (Source::Current, "antigravity") => "Sign in to Antigravity again.".to_string(),
+            (Source::Current, "zai") => {
+                format!("Check the key in {}.", quota_core::zai::API_KEY_ENV)
+            }
             (Source::Current, _) => "Sign in again with: codex login".to_string(),
             (Source::Quota, provider) => format!(
                 "Sign in again with: quota-cli accounts add {} {}",
@@ -134,6 +178,7 @@ impl Login {
             ),
             (Source::CodexBar, _) => "Sign in to this account again in CodexBar.".to_string(),
             (Source::ClaudeSwap, _) => "Sign in again with claude-swap.".to_string(),
+            (Source::Pi, _) => "Sign in again in pi with /login.".to_string(),
         }
     }
 }
@@ -267,7 +312,7 @@ pub async fn fetch_provider(
     config: &Config,
     registry: &Registry,
 ) -> Vec<AccountReport> {
-    if provider != "claude" && provider != "codex" {
+    if !MULTI_LOGIN_PROVIDERS.contains(&provider) {
         return quota_core::providers::fetch_provider(provider)
             .await
             .map(|result| AccountReport {
@@ -307,11 +352,12 @@ pub struct ListedAccount {
     pub logins: Vec<Login>,
 }
 
-/// Every Claude and Codex account found, grouped like `usage` groups them,
-/// without fetching usage. (claude-swap measures usage while it lists.)
+/// Every account of the providers that can have several, grouped like
+/// `usage` groups them, without fetching usage. (claude-swap measures usage
+/// while it lists, and pi's Claude login is looked up by its token.)
 pub async fn list_accounts(config: &Config, registry: &Registry) -> Vec<ListedAccount> {
     let mut listed = Vec::new();
-    for provider in ["claude", "codex"] {
+    for &provider in MULTI_LOGIN_PROVIDERS {
         let logins = discover(provider, config, registry).await;
         let keys: Vec<Option<String>> = logins.iter().map(|login| login.key.clone()).collect();
         for group in group_logins(&keys) {
@@ -365,6 +411,9 @@ pub async fn discover(provider: &'static str, config: &Config, registry: &Regist
             if config.sources.claude_swap {
                 logins.extend(claude_swap_logins().await);
             }
+            if config.sources.pi {
+                logins.extend(pi_claude_login().await);
+            }
         }
         "codex" => {
             if let Some(home) = quota_core::local_paths::provider_home("CODEX_HOME", ".codex") {
@@ -408,10 +457,282 @@ pub async fn discover(provider: &'static str, config: &Config, registry: &Regist
                 }
             }
             logins.iter_mut().for_each(inspect);
+            if config.sources.pi {
+                logins.extend(pi_codex_login());
+            }
+        }
+        "antigravity" => {
+            logins.push(current_antigravity_login());
+            if config.sources.pi {
+                logins.extend(pi_antigravity_logins());
+            }
+        }
+        "zai" => {
+            if let Ok(key) = std::env::var(quota_core::zai::API_KEY_ENV) {
+                if !key.trim().is_empty() {
+                    logins.push(zai_login(
+                        Source::Current,
+                        quota_core::zai::API_KEY_ENV,
+                        key.trim(),
+                        ZaiRegion::Global,
+                    ));
+                }
+            }
+            if config.sources.pi {
+                logins.extend(pi_zai_logins());
+            }
         }
         _ => {}
     }
     logins
+}
+
+/// How long before expiry a token another tool owns stops being used. Both
+/// CLIs renew five minutes early.
+const TOKEN_MARGIN_MS: i64 = 5 * 60 * 1000;
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+/// Where pi keeps its logins, for messages and `accounts list`.
+fn pi_location() -> Option<String> {
+    quota_core::pi::agent_dir().map(|dir| dir.join("auth.json").display().to_string())
+}
+
+/// pi's logins, or why there are none. A missing file is simply no logins.
+fn pi_auth() -> Result<serde_json::Map<String, serde_json::Value>, ProviderError> {
+    quota_core::pi::read_auth().map_err(|err| ProviderError::new(err.to_string(), false))
+}
+
+/// A login of pi's whose token has expired. pi renews it the next time it
+/// uses it; until then there is nothing to report, so it counts as not set up.
+fn expired_pi_login(provider: &'static str, store: Store) -> Login {
+    let mut login = Login::new(provider, Source::Pi, None, pi_location(), store);
+    login.problem = Some(ProviderError::new(
+        format!(
+            "pi's {} login has expired. pi renews it the next time it uses it.",
+            provider
+        ),
+        true,
+    ));
+    login
+}
+
+/// pi's Claude login. Its token does not say whose it is, so the account is
+/// looked up with it, which needs a token that is still good.
+async fn pi_claude_login() -> Option<Login> {
+    let auth = match pi_auth() {
+        Ok(auth) => auth,
+        Err(problem) => return Some(pi_problem_login("claude", problem)),
+    };
+    let quota_core::pi::PiCredential::OAuth(oauth) =
+        quota_core::pi::login(&auth, "anthropic").ok()?
+    else {
+        return None;
+    };
+    let credentials = LocalClaudeCredentials {
+        access_token: oauth.access.clone(),
+        expires_at_ms: oauth.expires_ms,
+        scopes: Vec::new(),
+        subscription_type: None,
+        organization_uuid: None,
+    };
+    if oauth.is_expired_at_ms(now_ms(), TOKEN_MARGIN_MS) {
+        return Some(expired_pi_login("claude", Store::ClaudeToken(credentials)));
+    }
+    let mut login = Login::new(
+        "claude",
+        Source::Pi,
+        None,
+        pi_location(),
+        Store::ClaudeToken(credentials),
+    );
+    login.expires_at_ms = oauth.expires_ms;
+    match quota_core::claude::local_usage::fetch_account(&oauth.access).await {
+        Ok(info) => {
+            login.email = info.email.clone();
+            login.key = info
+                .email
+                .as_deref()
+                .map(|email| claude_key(info.organization_uuid.as_deref(), email));
+        }
+        Err(err) => login.problem = Some(ProviderError::new(err.to_string(), false)),
+    }
+    Some(login)
+}
+
+/// pi's Codex login. Its access token names the account, so no request is
+/// needed to place it.
+fn pi_codex_login() -> Option<Login> {
+    let auth = match pi_auth() {
+        Ok(auth) => auth,
+        Err(problem) => return Some(pi_problem_login("codex", problem)),
+    };
+    let quota_core::pi::PiCredential::OAuth(oauth) =
+        quota_core::pi::login(&auth, "openai-codex").ok()?
+    else {
+        return None;
+    };
+    let credentials = quota_core::codex::local::credentials_from_access_token(
+        &oauth.access,
+        oauth.extra_text("accountId"),
+    );
+    let expires_at_ms = oauth.expires_ms.or(credentials.access_token_expires_at_ms);
+    let identity = credentials.identity();
+    let email = credentials.email.clone();
+    if expires_at_ms.is_some_and(|expires| expires <= now_ms() + TOKEN_MARGIN_MS) {
+        return Some(expired_pi_login("codex", Store::CodexToken(credentials)));
+    }
+    let mut login = Login::new(
+        "codex",
+        Source::Pi,
+        None,
+        pi_location(),
+        Store::CodexToken(credentials),
+    );
+    login.expires_at_ms = expires_at_ms;
+    login.email = email;
+    login.key = identity.map(|identity| format!("codex:{}", identity));
+    Some(login)
+}
+
+/// The Antigravity login this machine's own Antigravity sign-in left, if any.
+fn current_antigravity_login() -> Login {
+    use quota_core::antigravity::local::{read_any_credentials, LocalCredentialError};
+    use quota_core::antigravity::local_usage::{oauth_client_for, LocalUsageError};
+
+    let mut login = Login::new(
+        "antigravity",
+        Source::Current,
+        None,
+        None,
+        Store::Reported(Err(ProviderError::new("not read", true))),
+    );
+    match read_any_credentials() {
+        Ok(credentials) => {
+            if oauth_client_for(credentials.issued_to_client_id.as_deref()).is_none() {
+                // A Google login of another tool, such as the Gemini CLI. It
+                // is not an Antigravity login at all.
+                let err =
+                    LocalUsageError::UnknownOauthClient(credentials.issued_to_client_id.clone());
+                login.problem = Some(ProviderError::new(err.to_string(), true));
+                return login;
+            }
+            login.email = credentials.email.clone();
+            login.expires_at_ms = credentials.expiry_date_ms;
+            login.key = credentials.email.as_deref().map(antigravity_key);
+            login.store = Store::Antigravity(Box::new(credentials));
+        }
+        Err(err) => {
+            let not_found = matches!(err, LocalCredentialError::NotFound);
+            login.problem = Some(ProviderError::new(err.to_string(), not_found));
+        }
+    }
+    login
+}
+
+fn antigravity_key(email: &str) -> String {
+    format!("google:{}", email.trim().to_lowercase())
+}
+
+/// The Antigravity accounts the pi-antigravity extension has signed in: the
+/// active one in `auth.json`, and any others it linked.
+fn pi_antigravity_logins() -> Vec<Login> {
+    let auth = match pi_auth() {
+        Ok(auth) => auth,
+        Err(problem) => return vec![pi_problem_login("antigravity", problem)],
+    };
+    let mut accounts = Vec::new();
+    if let Ok(quota_core::pi::PiCredential::OAuth(oauth)) =
+        quota_core::pi::login(&auth, "antigravity")
+    {
+        accounts.push(oauth);
+    }
+    accounts.extend(quota_core::pi::antigravity_accounts().unwrap_or_default());
+
+    let mut logins: Vec<Login> = Vec::new();
+    for oauth in accounts {
+        let credentials = LocalAntigravityCredentials::from_pi(&oauth);
+        let key = credentials.email.as_deref().map(antigravity_key);
+        // The active account is in both files.
+        if key.is_some() && logins.iter().any(|login| login.key == key) {
+            continue;
+        }
+        let mut login = Login::new(
+            "antigravity",
+            Source::Pi,
+            None,
+            pi_location(),
+            Store::Antigravity(Box::new(credentials.clone())),
+        );
+        login.email = credentials.email.clone();
+        login.expires_at_ms = credentials.expiry_date_ms;
+        login.key = key;
+        logins.push(login);
+    }
+    logins
+}
+
+/// pi's Z.ai keys: `zai` for api.z.ai, `zai-coding-cn` for BigModel.
+fn pi_zai_logins() -> Vec<Login> {
+    let auth = match pi_auth() {
+        Ok(auth) => auth,
+        Err(problem) => return vec![pi_problem_login("zai", problem)],
+    };
+    let mut logins = Vec::new();
+    for (provider, region) in quota_core::zai::PI_PROVIDERS {
+        match quota_core::pi::login(&auth, provider) {
+            Ok(quota_core::pi::PiCredential::ApiKey(key)) => {
+                logins.push(zai_login(
+                    Source::Pi,
+                    &pi_location().unwrap_or_default(),
+                    &key,
+                    *region,
+                ));
+            }
+            Ok(quota_core::pi::PiCredential::OAuth(_)) | Err(quota_core::pi::PiError::NotFound) => {
+            }
+            Err(err) => logins.push(pi_problem_login(
+                "zai",
+                ProviderError::new(err.to_string(), false),
+            )),
+        }
+    }
+    logins
+}
+
+fn zai_login(source: Source, location: &str, key: &str, region: ZaiRegion) -> Login {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(key.as_bytes());
+    let fingerprint: String = digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{:02x}", byte))
+        .collect();
+    let mut login = Login::new(
+        "zai",
+        source,
+        None,
+        Some(location.to_string()),
+        Store::Zai(ApiKey(key.to_string()), region),
+    );
+    login.key = Some(format!("zai:{:?}:{}", region, fingerprint));
+    login
+}
+
+/// pi's file exists but cannot be read: one line saying so.
+fn pi_problem_login(provider: &'static str, problem: ProviderError) -> Login {
+    let mut login = Login::new(
+        provider,
+        Source::Pi,
+        None,
+        pi_location(),
+        Store::Reported(Err(problem.clone())),
+    );
+    login.problem = Some(problem);
+    login
 }
 
 /// The login a configured Claude directory names. The default directory means
@@ -475,7 +796,11 @@ fn inspect(login: &mut Login) {
             }
             Err(err) => login.problem = Some(codex_problem(login, &err)),
         },
-        Store::Reported(_) => {}
+        Store::Reported(_)
+        | Store::ClaudeToken(_)
+        | Store::CodexToken(_)
+        | Store::Antigravity(_)
+        | Store::Zai(..) => {}
     }
 }
 
@@ -556,14 +881,43 @@ pub async fn fetch_login(login: &Login, renew: bool) -> Result<ProviderUsage, Pr
     if let Some(problem) = &login.problem {
         return Err(problem.clone());
     }
-    if !renew && expires_soon(login.expires_at_ms) {
+    if !renew && !login.store.renews_in_memory() && expires_soon(login.expires_at_ms) {
         return Err(ProviderError::new("the saved token has expired", false));
     }
     match &login.store {
         Store::Claude(claude) => fetch_claude(login, claude, renew).await,
         Store::Codex(home) => fetch_codex(login, home, renew).await,
         Store::Reported(result) => result.clone(),
+        Store::ClaudeToken(credentials) => {
+            quota_core::claude::local_usage::fetch_usage(credentials)
+                .await
+                .map_err(|err| owned_token_error(login, err.to_string()))
+        }
+        Store::CodexToken(credentials) => quota_core::codex::local_usage::fetch_usage(credentials)
+            .await
+            .map_err(|err| owned_token_error(login, err.to_string())),
+        Store::Antigravity(credentials) => {
+            quota_core::antigravity::local_usage::fetch_usage(credentials)
+                .await
+                .map_err(|err| ProviderError::new(err.to_string(), err.is_not_configured()))
+        }
+        Store::Zai(key, region) => quota_core::zai::fetch_usage(&key.0, *region)
+            .await
+            .map_err(|err| ProviderError::new(err.to_string(), err.is_not_configured())),
     }
+}
+
+/// A token another tool owns failed. Its own messages suggest running a CLI
+/// that would not renew it, so name the owner instead.
+fn owned_token_error(login: &Login, message: String) -> ProviderError {
+    ProviderError::new(
+        format!(
+            "{} ({} login)",
+            message.trim_end_matches('.'),
+            login.source.name()
+        ),
+        false,
+    )
 }
 
 /// Both CLIs treat a token as expired five minutes early.

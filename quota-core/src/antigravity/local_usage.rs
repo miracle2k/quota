@@ -36,8 +36,13 @@ pub struct OauthClient {
     pub code_assist_base: &'static str,
 }
 
+/// Antigravity's own OAuth client, which the pi-antigravity extension signs in
+/// with too.
+pub const ANTIGRAVITY_CLIENT_ID: &str =
+    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+
 const OAUTH_CLIENTS: [OauthClient; 1] = [OauthClient {
-    client_id: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
+    client_id: ANTIGRAVITY_CLIENT_ID,
     client_secret: "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",
     code_assist_base: "https://daily-cloudcode-pa.googleapis.com",
 }];
@@ -85,6 +90,7 @@ pub fn normalize_quota_response(raw: &Value, account_label: Option<String>) -> P
         windows,
         note: None,
         resets: None,
+        balance: None,
     }
 }
 
@@ -163,9 +169,14 @@ pub enum LocalUsageError {
 }
 
 impl LocalUsageError {
-    /// No Antigravity login exists here, as opposed to one that failed.
+    /// No Antigravity login exists here, as opposed to one that failed. A
+    /// Google login of another client, such as the Gemini CLI's in the shared
+    /// `oauth_creds.json`, is not an Antigravity login either.
     pub fn is_not_configured(&self) -> bool {
-        matches!(self, Self::Credentials(LocalCredentialError::NotFound))
+        matches!(
+            self,
+            Self::Credentials(LocalCredentialError::NotFound) | Self::UnknownOauthClient(_)
+        )
     }
 }
 
@@ -210,13 +221,21 @@ impl std::fmt::Display for LocalUsageError {
 /// Read local credentials and fetch current usage. Never writes to disk.
 pub async fn fetch_local_usage() -> Result<ProviderUsage, LocalUsageError> {
     let credentials = read_any_credentials().map_err(LocalUsageError::Credentials)?;
+    fetch_usage(&credentials).await
+}
+
+/// Fetch usage for credentials already read, such as a login from pi. An
+/// expired access token is renewed in memory only. Never writes to disk.
+pub async fn fetch_usage(
+    credentials: &LocalAntigravityCredentials,
+) -> Result<ProviderUsage, LocalUsageError> {
     let client = reqwest::Client::new();
 
     let oauth = oauth_client_for(credentials.issued_to_client_id.as_deref()).ok_or_else(|| {
         LocalUsageError::UnknownOauthClient(credentials.issued_to_client_id.clone())
     })?;
 
-    let access_token = resolve_access_token(&client, &credentials, &oauth).await?;
+    let access_token = resolve_access_token(&client, credentials, &oauth).await?;
 
     // loadCodeAssist names the project the quota call needs.
     let load = post_code_assist(

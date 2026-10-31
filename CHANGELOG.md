@@ -10,6 +10,10 @@ All notable changes to this project will be documented here.
 - `usage --json` now has one record per account, including the ones without a login, with `status` (`ok`, `not_configured`, `error`), `label`, `email`, `sources`, `resets`, and `error` on every record.
 - `usage claude codex` checks only the named providers.
 - `[usage]` in the config file quiets providers you do not use: `skip` never checks them, and `hide_errors` shows them only when they report usage.
+- A Z.ai provider: the GLM Coding Plan's `5h`, `Wk` and `MCP` windows when the account has a plan, and the prepaid balance either way (`api.z.ai` in US dollars, BigModel in yuan). The key comes from `ZAI_API_KEY` or from pi.
+- The pi coding agent's logins in `~/.pi/agent/auth.json` are picked up: Claude and Codex (used while their token is good, never renewed outside pi), the pi-antigravity extension's Antigravity accounts (renewed in memory, like Antigravity's own), and Z.ai keys. `[sources] pi = false` turns this off.
+- Antigravity can report more than one account, matched by Google address. A Gemini CLI login in `~/.gemini/oauth_creds.json` now counts as no Antigravity login instead of an error.
+- `usage --json` records gain `balance`.
 - Banked limit resets show for Codex (`rate_limit_reset_credits`, with expiry dates from `/wham/rate-limit-reset-credits`) and Claude (the `cedar_ember` grants, with their end date). Claude only reports these to a `claude-cli/` user agent, so the Claude usage call now sends `claude-cli/<version> (external, cli) quota/<version>`.
 - More Claude and Codex accounts. `quota-cli accounts add claude|codex <label>` signs in to another account in a directory under the data directory (`~/Library/Application Support/quota-cli` on macOS, `QUOTA_CLI_DATA_DIR` moves it) by running the provider's own sign-in with `CLAUDE_CONFIG_DIR` or `CODEX_HOME` set. `accounts remove` deletes one again, and `accounts` lists every login found and where.
 - An optional config file, `~/.config/quota-cli/config.toml`, lists more Claude logins (by `CLAUDE_CONFIG_DIR`) and Codex logins (by `CODEX_HOME`), each with a label.

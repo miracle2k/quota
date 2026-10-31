@@ -135,6 +135,7 @@ fn usage_from(usage: Usage) -> ProviderUsage {
         ],
         note: None,
         resets: None,
+        balance: None,
     }
 }
 

@@ -35,6 +35,7 @@ pub fn normalize_usage_response(raw: &Value, account_label: Option<String>) -> P
         ],
         note: None,
         resets: limit_resets(raw),
+        balance: None,
     }
 }
 
@@ -136,10 +137,7 @@ impl std::fmt::Display for LocalUsageError {
                 formatter,
                 "Codex rejected the stored token. Run the Codex CLI to refresh it."
             ),
-            Self::Forbidden => write!(
-                formatter,
-                "Codex refused the usage request (HTTP 403)."
-            ),
+            Self::Forbidden => write!(formatter, "Codex refused the usage request (HTTP 403)."),
             Self::Request(detail) => write!(formatter, "Codex usage request failed: {}", detail),
         }
     }
@@ -198,7 +196,11 @@ pub async fn fetch_usage(
         serde_json::from_str(&body).map_err(|err| LocalUsageError::Request(err.to_string()))?;
 
     let mut usage = normalize_usage_response(&raw, credentials.plan.clone());
-    if usage.resets.as_ref().is_some_and(|resets| resets.available > 0) {
+    if usage
+        .resets
+        .as_ref()
+        .is_some_and(|resets| resets.available > 0)
+    {
         // The expiry is a detail. Without it the count still stands.
         if let Some(listed) = fetch_reset_credits(credentials).await {
             usage.resets = Some(listed);

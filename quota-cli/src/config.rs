@@ -15,6 +15,7 @@
 //! [sources]
 //! codexbar = true      # CodexBar's Codex accounts
 //! claude_swap = true   # claude-swap's Claude accounts
+//! pi = true            # the pi coding agent's logins
 //!
 //! [usage]
 //! skip = ["kiro"]                 # never checked
@@ -68,6 +69,8 @@ pub struct Sources {
     pub codexbar: bool,
     #[serde(default = "enabled")]
     pub claude_swap: bool,
+    #[serde(default = "enabled")]
+    pub pi: bool,
 }
 
 impl Default for Sources {
@@ -75,6 +78,7 @@ impl Default for Sources {
         Self {
             codexbar: true,
             claude_swap: true,
+            pi: true,
         }
     }
 }
@@ -141,7 +145,10 @@ pub fn parse(text: &str) -> Result<Config, String> {
     }
 
     // A misspelled name would silently quiet nothing.
-    let named = [("skip", &config.usage.skip), ("hide_errors", &config.usage.hide_errors)];
+    let named = [
+        ("skip", &config.usage.skip),
+        ("hide_errors", &config.usage.hide_errors),
+    ];
     for (key, names) in named {
         if let Some(unknown) = names
             .iter()

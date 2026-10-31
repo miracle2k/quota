@@ -97,6 +97,7 @@ fn logins_quota_can_fetch_come_before_reported_and_broken_ones() {
         windows: vec![],
         note: None,
         resets: None,
+        balance: None,
     }));
     let usable = login(Source::Config, Some("work"), None);
 

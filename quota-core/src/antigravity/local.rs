@@ -68,6 +68,18 @@ pub struct LocalAntigravityCredentials {
 }
 
 impl LocalAntigravityCredentials {
+    /// A login the pi-antigravity extension keeps. It signs in with
+    /// Antigravity's own OAuth client and records the account's address.
+    pub fn from_pi(login: &crate::pi::PiOAuth) -> Self {
+        Self {
+            access_token: login.access.clone(),
+            refresh_token: login.refresh.clone(),
+            expiry_date_ms: login.expires_ms,
+            email: login.extra_text("email"),
+            issued_to_client_id: Some(super::local_usage::ANTIGRAVITY_CLIENT_ID.to_string()),
+        }
+    }
+
     /// True when the stored expiry is within a minute of `now_ms`, matching the
     /// desktop app's margin. A token about to expire mid-request is no better
     /// than one already expired.

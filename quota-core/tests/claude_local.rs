@@ -262,7 +262,10 @@ fn a_renewal_keeps_what_claude_code_stored_and_replaces_the_tokens() {
     assert_eq!(oauth["accessToken"], "new");
     assert_eq!(oauth["refreshToken"], "old-refresh");
     assert_eq!(oauth["expiresAt"], 61_000);
-    assert_eq!(oauth["scopes"], serde_json::json!(["user:inference", "user:profile"]));
+    assert_eq!(
+        oauth["scopes"],
+        serde_json::json!(["user:inference", "user:profile"])
+    );
     assert_eq!(oauth["subscriptionType"], "pro");
     assert!(oauth.get("refreshTokenExpiresAt").is_none());
     assert_eq!(document["trustedDeviceToken"], "keep");
@@ -278,7 +281,8 @@ fn only_a_refused_refresh_token_asks_for_a_new_sign_in() {
     assert!(!classify_failure(500, "oops").needs_sign_in());
     assert!(!classify_failure(429, "").needs_sign_in());
     // Only the code is quoted, never the body.
-    let message = classify_failure(503, r#"{"error":"overloaded","detail":"secret-ish"}"#).to_string();
+    let message =
+        classify_failure(503, r#"{"error":"overloaded","detail":"secret-ish"}"#).to_string();
     assert!(message.contains("overloaded"));
     assert!(!message.contains("secret-ish"));
 }

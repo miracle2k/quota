@@ -20,6 +20,27 @@ pub struct LimitResets {
     pub expires_at: Option<i64>,
 }
 
+/// Money left on a prepaid account, for a provider that bills that way
+/// instead of, or as well as, through usage windows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Balance {
+    pub amount: f64,
+    /// ISO 4217 code, such as `USD` or `CNY`.
+    pub currency: String,
+}
+
+impl Balance {
+    /// "$7.95", "¥7.95", or "7.95 EUR".
+    pub fn display(&self) -> String {
+        match self.currency.as_str() {
+            "USD" => format!("${:.2}", self.amount),
+            "CNY" => format!("¥{:.2}", self.amount),
+            other => format!("{:.2} {}", self.amount, other),
+        }
+    }
+}
+
 /// Normalized usage for one provider account. Windows are ordered shortest
 /// first, so the compact token reads "5h ... then Wk ...".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,6 +59,9 @@ pub struct ProviderUsage {
     /// not say, which is different from a reported zero.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets: Option<LimitResets>,
+    /// Prepaid money left, for a provider that reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance: Option<Balance>,
 }
 
 impl ProviderUsage {
@@ -55,10 +79,12 @@ impl ProviderUsage {
             .take(2)
             .collect();
 
-        if parts.is_empty() {
-            self.note.clone()
-        } else {
+        if !parts.is_empty() {
             Some(parts.join(" · "))
+        } else if let Some(balance) = &self.balance {
+            Some(balance.display())
+        } else {
+            self.note.clone()
         }
     }
 }

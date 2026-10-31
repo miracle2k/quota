@@ -23,6 +23,7 @@ fn usage(windows: Vec<UsageWindow>, note: Option<&str>) -> ProviderUsage {
         windows,
         note: note.map(str::to_string),
         resets: None,
+        balance: None,
     }
 }
 
@@ -246,6 +247,7 @@ fn json_records_keep_every_field_and_say_why_a_login_has_no_numbers() {
             "windows": [],
             "note": null,
             "resets": null,
+            "balance": null,
             "error": "No Cursor credentials found."
         })
     );
@@ -275,17 +277,18 @@ fn the_account_list_shows_each_login_under_its_account() {
     use quota_cli::accounts::{ListedAccount, Login, Store};
     use quota_cli::render::account_list;
 
-    let login = |source, email: Option<&str>, location: &str, problem: Option<ProviderError>| Login {
-        provider: "codex",
-        source,
-        label: None,
-        location: Some(location.to_string()),
-        store: Store::Codex(std::path::PathBuf::from(location)),
-        email: email.map(str::to_string),
-        key: None,
-        expires_at_ms: None,
-        problem,
-    };
+    let login =
+        |source, email: Option<&str>, location: &str, problem: Option<ProviderError>| Login {
+            provider: "codex",
+            source,
+            label: None,
+            location: Some(location.to_string()),
+            store: Store::Codex(std::path::PathBuf::from(location)),
+            email: email.map(str::to_string),
+            key: None,
+            expires_at_ms: None,
+            problem,
+        };
     let accounts = vec![
         ListedAccount {
             provider: "codex",
@@ -293,7 +296,12 @@ fn the_account_list_shows_each_login_under_its_account() {
             email: Some("me@example.com".to_string()),
             logins: vec![
                 login(Source::Current, Some("me@example.com"), "/srv/codex", None),
-                login(Source::CodexBar, Some("me@example.com"), "/srv/codexbar/A", None),
+                login(
+                    Source::CodexBar,
+                    Some("me@example.com"),
+                    "/srv/codexbar/A",
+                    None,
+                ),
             ],
         },
         ListedAccount {
@@ -304,7 +312,10 @@ fn the_account_list_shows_each_login_under_its_account() {
                 Source::Config,
                 None,
                 "/srv/codex-work",
-                Some(ProviderError::new("No Codex login in /srv/codex-work.", true)),
+                Some(ProviderError::new(
+                    "No Codex login in /srv/codex-work.",
+                    true,
+                )),
             )],
         },
     ];
@@ -321,7 +332,13 @@ fn the_account_list_shows_each_login_under_its_account() {
 
 #[test]
 fn a_provider_whose_errors_are_hidden_shows_only_when_it_works() {
-    let failed = report(None, Err(ProviderError::new("The stored Kiro token has lapsed.", false)));
+    let failed = report(
+        None,
+        Err(ProviderError::new(
+            "The stored Kiro token has lapsed.",
+            false,
+        )),
+    );
     assert!(!shown_in_text(&failed, NOW, false, true));
     // `--all` is for finding out why, so it still shows.
     assert!(shown_in_text(&failed, NOW, true, true));
@@ -329,6 +346,42 @@ fn a_provider_whose_errors_are_hidden_shows_only_when_it_works() {
     let configured = report(Some("work"), Err(ProviderError::new("refused", false)));
     assert!(!shown_in_text(&configured, NOW, false, true));
 
-    let working = report(None, Ok(usage(vec![window("Credits", Some(100), None)], None)));
+    let working = report(
+        None,
+        Ok(usage(vec![window("Credits", Some(100), None)], None)),
+    );
     assert!(shown_in_text(&working, NOW, false, true));
+}
+
+#[test]
+fn a_prepaid_balance_shows_with_or_without_windows() {
+    use quota_core::usage::Balance;
+
+    let balance = Some(Balance {
+        amount: 7.949,
+        currency: "USD".to_string(),
+    });
+    let no_plan = ProviderUsage {
+        balance: balance.clone(),
+        ..usage(vec![], Some("No GLM Coding Plan"))
+    };
+    assert_eq!(
+        usage_detail(&no_plan, NOW).as_deref(),
+        Some("$7.95 balance · No GLM Coding Plan")
+    );
+
+    let plan = ProviderUsage {
+        balance,
+        ..usage(vec![window("5h", Some(80), None)], Some("ignored"))
+    };
+    assert_eq!(
+        usage_detail(&plan, NOW).as_deref(),
+        Some("5h 80% left · $7.95 balance")
+    );
+    let record = report(None, Ok(plan));
+    let value = serde_json::to_value(usage_record(&record)).expect("json");
+    assert_eq!(
+        value["balance"],
+        serde_json::json!({ "amount": 7.949, "currency": "USD" })
+    );
 }

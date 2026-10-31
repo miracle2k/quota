@@ -175,7 +175,13 @@ fn accounts_lists_by_default() {
 #[test]
 fn accounts_add_and_remove_take_a_provider_and_a_label() {
     assert_eq!(
-        parse_args(&argv(&["accounts", "add", "codex", "work", "--device-auth"])),
+        parse_args(&argv(&[
+            "accounts",
+            "add",
+            "codex",
+            "work",
+            "--device-auth"
+        ])),
         Ok(Command::AccountsAdd {
             provider: "codex".to_string(),
             label: "work".to_string(),
