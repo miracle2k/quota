@@ -207,24 +207,24 @@ fn the_text_report_leaves_out_providers_that_are_not_set_up_unless_asked() {
         None,
         Err(ProviderError::new("No Cursor credentials found.", true)),
     );
-    assert!(!shown_in_text(&missing, NOW, false));
-    assert!(shown_in_text(&missing, NOW, true));
+    assert!(!shown_in_text(&missing, NOW, false, false));
+    assert!(shown_in_text(&missing, NOW, true, false));
 
     let blank = report(None, Ok(usage(vec![window("Plan", None, None)], None)));
-    assert!(!shown_in_text(&blank, NOW, false));
+    assert!(!shown_in_text(&blank, NOW, false, false));
 
     // A real failure is worth seeing, and so is anything the file asked for.
     let failed = report(
         None,
         Err(ProviderError::new("Cursor rejected the token.", false)),
     );
-    assert!(shown_in_text(&failed, NOW, false));
+    assert!(shown_in_text(&failed, NOW, false, false));
 
     let configured = report(
         Some("work"),
         Err(ProviderError::new("No login in ~/x.", true)),
     );
-    assert!(shown_in_text(&configured, NOW, false));
+    assert!(shown_in_text(&configured, NOW, false, false));
 }
 
 #[test]
@@ -317,4 +317,18 @@ fn the_account_list_shows_each_login_under_its_account() {
          codex (work)\n\
          \x20 config    not signed in   /srv/codex-work\n"
     );
+}
+
+#[test]
+fn a_provider_whose_errors_are_hidden_shows_only_when_it_works() {
+    let failed = report(None, Err(ProviderError::new("The stored Kiro token has lapsed.", false)));
+    assert!(!shown_in_text(&failed, NOW, false, true));
+    // `--all` is for finding out why, so it still shows.
+    assert!(shown_in_text(&failed, NOW, true, true));
+    // Even an account set up on purpose stays quiet once its provider is.
+    let configured = report(Some("work"), Err(ProviderError::new("refused", false)));
+    assert!(!shown_in_text(&configured, NOW, false, true));
+
+    let working = report(None, Ok(usage(vec![window("Credits", Some(100), None)], None)));
+    assert!(shown_in_text(&working, NOW, false, true));
 }

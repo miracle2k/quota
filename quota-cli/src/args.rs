@@ -68,7 +68,13 @@ claude-swap. Each account is shown once.
 quota-cli keeps the accounts it adds in its data directory (on macOS
 ~/Library/Application Support/quota-cli; QUOTA_CLI_DATA_DIR moves it).
 The config file is ~/.config/quota-cli/config.toml (QUOTA_CLI_CONFIG moves it).
-See the README for its format.
+Besides more logins, it can skip providers or show them only when they work:
+
+  [usage]
+  skip = [\"kiro\"]
+  hide_errors = [\"antigravity\"]
+
+See the README for the rest of its format.
 ";
 
 pub fn parse_args(argv: &[String]) -> Result<Command, String> {

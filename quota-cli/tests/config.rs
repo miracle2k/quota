@@ -1,7 +1,7 @@
 //! Covers the config file that lists extra Claude and Codex logins.
 
 use quota_cli::config::{
-    expand_home, load_from, parse, ClaudeAccount, CodexAccount, Config, Sources,
+    expand_home, load_from, parse, ClaudeAccount, CodexAccount, Config, Sources, UsageSettings,
 };
 
 #[test]
@@ -42,8 +42,25 @@ fn parses_extra_claude_and_codex_logins() {
                 },
             ],
             sources: Sources::default(),
+            usage: UsageSettings::default(),
         }
     );
+}
+
+#[test]
+fn providers_can_be_skipped_or_shown_only_when_they_work() {
+    let config = parse(
+        "[usage]\nskip = [\"kiro\"]\nhide_errors = [\"antigravity\", \"cursor\"]\n",
+    )
+    .expect("parse");
+    assert_eq!(config.usage.skip, vec!["kiro".to_string()]);
+    assert!(config.usage.hides_errors_of("antigravity"));
+    assert!(!config.usage.hides_errors_of("claude"));
+
+    // A misspelled provider would quietly do nothing, so it is an error.
+    let error = parse("[usage]\nhide_errors = [\"antigravty\"]\n").expect_err("reject");
+    assert!(error.contains("antigravty"), "{}", error);
+    assert!(parse("[usage]\nhide = [\"kiro\"]\n").is_err());
 }
 
 #[test]

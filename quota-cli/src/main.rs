@@ -97,10 +97,18 @@ async fn run_usage(json: bool, all: bool, providers: &[String]) {
     use quota_cli::render;
 
     let (config, registry) = load_sources();
+    // Providers named on the command line are checked even when the config
+    // file skips them.
     let providers: Vec<&'static str> = quota_core::providers::PROVIDERS
         .iter()
         .copied()
-        .filter(|known| providers.iter().any(|wanted| wanted == known))
+        .filter(|known| {
+            if providers.is_empty() {
+                !config.usage.skip.iter().any(|skipped| skipped == known)
+            } else {
+                providers.iter().any(|wanted| wanted == known)
+            }
+        })
         .collect();
 
     let reports = quota_cli::accounts::fetch_all(&config, &registry, &providers).await;
@@ -127,7 +135,14 @@ async fn run_usage(json: bool, all: bool, providers: &[String]) {
 
         let shown: Vec<_> = reports
             .iter()
-            .filter(|report| render::shown_in_text(report, now, all))
+            .filter(|report| {
+                render::shown_in_text(
+                    report,
+                    now,
+                    all,
+                    config.usage.hides_errors_of(report.provider),
+                )
+            })
             .map(|report| {
                 (
                     render::account_name(report.provider, report.label.as_deref()),

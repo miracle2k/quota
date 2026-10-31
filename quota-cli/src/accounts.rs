@@ -244,8 +244,8 @@ pub async fn fetch_account(logins: &[&Login]) -> Result<ProviderUsage, ProviderE
     Err(first_error.unwrap_or_else(|| ProviderError::new("no login to fetch", false)))
 }
 
-/// Fetch every account in registry order. For Claude and Codex that is every
-/// account found, the current login's first.
+/// Fetch every account of the given providers, in registry order. For Claude
+/// and Codex that is every account found, the current login's first.
 pub async fn fetch_all(
     config: &Config,
     registry: &Registry,
@@ -253,7 +253,7 @@ pub async fn fetch_all(
 ) -> Vec<AccountReport> {
     let mut reports = Vec::new();
     for &provider in PROVIDERS {
-        if providers.is_empty() || providers.contains(&provider) {
+        if providers.contains(&provider) {
             reports.extend(fetch_provider(provider, config, registry).await);
         }
     }

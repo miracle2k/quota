@@ -57,11 +57,18 @@ pub fn account_name(provider: &str, label: Option<&str>) -> String {
 }
 
 /// Whether the text report shows an account. Without `--all` it leaves out
-/// providers that are not set up here and logins with nothing to show. An
-/// account set up for quota-cli, through `accounts add` or the config file,
-/// always shows, so a mistake there is visible.
-pub fn shown_in_text(report: &AccountReport, now: i64, all: bool) -> bool {
-    if all || report.is_configured() {
+/// providers that are not set up here, logins with nothing to show, and
+/// failures of the providers the config file lists in `usage.hide_errors`.
+/// Otherwise an account set up for quota-cli, through `accounts add` or the
+/// config file, always shows, so a mistake there is visible.
+pub fn shown_in_text(report: &AccountReport, now: i64, all: bool, hide_errors: bool) -> bool {
+    if all {
+        return true;
+    }
+    if hide_errors && report.result.is_err() {
+        return false;
+    }
+    if report.is_configured() {
         return true;
     }
     match &report.result {

@@ -1,7 +1,7 @@
 //! The optional config file. It lists extra Claude and Codex logins for
 //! `usage` to report on, each kept in its own directory the way the provider's
-//! CLI keeps one when pointed somewhere else, and can turn off reading the
-//! accounts of other tools.
+//! CLI keeps one when pointed somewhere else. It can also turn off reading the
+//! accounts of other tools, and quiet providers you do not care about.
 //!
 //! ```toml
 //! [[claude]]
@@ -15,6 +15,10 @@
 //! [sources]
 //! codexbar = true      # CodexBar's Codex accounts
 //! claude_swap = true   # claude-swap's Claude accounts
+//!
+//! [usage]
+//! skip = ["kiro"]                 # never checked
+//! hide_errors = ["antigravity"]   # shown only when they report usage
 //! ```
 
 use serde::Deserialize;
@@ -32,6 +36,27 @@ pub struct Config {
     pub codex: Vec<CodexAccount>,
     #[serde(default)]
     pub sources: Sources,
+    #[serde(default)]
+    pub usage: UsageSettings,
+}
+
+/// Providers the `usage` report leaves out.
+#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsageSettings {
+    /// Never checked, unless named on the command line.
+    #[serde(default)]
+    pub skip: Vec<String>,
+    /// Shown only when they report usage. `--all` and `--json` still show
+    /// why one failed.
+    #[serde(default)]
+    pub hide_errors: Vec<String>,
+}
+
+impl UsageSettings {
+    pub fn hides_errors_of(&self, provider: &str) -> bool {
+        self.hide_errors.iter().any(|name| name == provider)
+    }
 }
 
 /// Other tools whose accounts `usage` reads when they are installed. Both are
@@ -113,6 +138,22 @@ pub fn parse(text: &str) -> Result<Config, String> {
         .chain(config.codex.iter().map(|account| account.label.as_str()));
     if labels.into_iter().any(|label| label.trim().is_empty()) {
         return Err("every account needs a non-empty label".to_string());
+    }
+
+    // A misspelled name would silently quiet nothing.
+    let named = [("skip", &config.usage.skip), ("hide_errors", &config.usage.hide_errors)];
+    for (key, names) in named {
+        if let Some(unknown) = names
+            .iter()
+            .find(|name| !quota_core::providers::PROVIDERS.contains(&name.as_str()))
+        {
+            return Err(format!(
+                "unknown provider in usage.{}: {} (known: {})",
+                key,
+                unknown,
+                quota_core::providers::PROVIDERS.join(", ")
+            ));
+        }
     }
 
     Ok(config)

@@ -45,6 +45,14 @@ Name providers to check only those:
 quota-cli usage claude codex
 ```
 
+To leave a provider out for good, list it in the config file (see [The config file](#the-config-file)). `skip` means it is never checked, unless you name it on the command line. `hide_errors` means it shows only when it reports usage, and its errors show only with `--all` or in `--json`:
+
+```toml
+[usage]
+skip = ["kiro"]
+hide_errors = ["antigravity"]
+```
+
 For scripting, `--json` prints one record per account, including the ones `--all` would add:
 
 ```bash
@@ -157,6 +165,16 @@ The file can also turn off reading other tools' accounts:
 codexbar = false
 claude_swap = false
 ```
+
+And it can quiet providers you do not use, as shown under [Usage](#usage):
+
+```toml
+[usage]
+skip = ["kiro"]                 # never checked
+hide_errors = ["antigravity"]   # shown only when it reports usage
+```
+
+A provider name the file does not know is an error, so a typo does not silently quiet nothing.
 
 ### CodexBar and claude-swap
 

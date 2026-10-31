@@ -9,6 +9,7 @@ All notable changes to this project will be documented here.
 - `usage` leaves out providers you are not signed into, and logins with nothing to show. `--all` lists them again, with the reason.
 - `usage --json` now has one record per account, including the ones without a login, with `status` (`ok`, `not_configured`, `error`), `label`, `email`, `sources`, `resets`, and `error` on every record.
 - `usage claude codex` checks only the named providers.
+- `[usage]` in the config file quiets providers you do not use: `skip` never checks them, and `hide_errors` shows them only when they report usage.
 - Banked limit resets show for Codex (`rate_limit_reset_credits`, with expiry dates from `/wham/rate-limit-reset-credits`) and Claude (the `cedar_ember` grants, with their end date). Claude only reports these to a `claude-cli/` user agent, so the Claude usage call now sends `claude-cli/<version> (external, cli) quota/<version>`.
 - More Claude and Codex accounts. `quota-cli accounts add claude|codex <label>` signs in to another account in a directory under the data directory (`~/Library/Application Support/quota-cli` on macOS, `QUOTA_CLI_DATA_DIR` moves it) by running the provider's own sign-in with `CLAUDE_CONFIG_DIR` or `CODEX_HOME` set. `accounts remove` deletes one again, and `accounts` lists every login found and where.
 - An optional config file, `~/.config/quota-cli/config.toml`, lists more Claude logins (by `CLAUDE_CONFIG_DIR`) and Codex logins (by `CODEX_HOME`), each with a label.
