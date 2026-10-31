@@ -1,7 +1,7 @@
 //! Covers the text report's window rendering, including the reset durations
 //! the Herdr sidebar token deliberately leaves out.
 
-use quota_cli::accounts::AccountReport;
+use quota_cli::accounts::{AccountReport, Source};
 use quota_cli::render::{account_name, shown_in_text, usage_detail, usage_record};
 use quota_core::providers::ProviderError;
 use quota_core::usage::{LimitResets, ProviderUsage, UsageWindow};
@@ -185,10 +185,18 @@ fn a_label_from_the_config_file_follows_the_provider_name() {
     assert_eq!(account_name("codex", None), "codex");
 }
 
+/// A report for the current login, or for a config file entry when it has a
+/// label.
 fn report(label: Option<&str>, result: Result<ProviderUsage, ProviderError>) -> AccountReport {
     AccountReport {
         provider: "cursor",
         label: label.map(str::to_string),
+        email: None,
+        sources: vec![if label.is_some() {
+            Source::Config
+        } else {
+            Source::Current
+        }],
         result,
     }
 }
@@ -231,6 +239,8 @@ fn json_records_keep_every_field_and_say_why_a_login_has_no_numbers() {
         serde_json::json!({
             "provider": "cursor",
             "label": null,
+            "email": null,
+            "sources": ["current"],
             "status": "not_configured",
             "accountLabel": null,
             "windows": [],
@@ -251,10 +261,60 @@ fn json_records_keep_every_field_and_say_why_a_login_has_no_numbers() {
     let value = serde_json::to_value(usage_record(&working)).expect("json");
     assert_eq!(value["status"], "ok");
     assert_eq!(value["label"], "work");
+    assert_eq!(value["sources"], serde_json::json!(["config"]));
     assert_eq!(value["windows"][0]["remainingPercent"], 80);
     assert_eq!(
         value["resets"],
         serde_json::json!({ "available": 2, "expiresAt": null })
     );
     assert_eq!(value["error"], serde_json::Value::Null);
+}
+
+#[test]
+fn the_account_list_shows_each_login_under_its_account() {
+    use quota_cli::accounts::{ListedAccount, Login, Store};
+    use quota_cli::render::account_list;
+
+    let login = |source, email: Option<&str>, location: &str, problem: Option<ProviderError>| Login {
+        provider: "codex",
+        source,
+        label: None,
+        location: Some(location.to_string()),
+        store: Store::Codex(std::path::PathBuf::from(location)),
+        email: email.map(str::to_string),
+        key: None,
+        expires_at_ms: None,
+        problem,
+    };
+    let accounts = vec![
+        ListedAccount {
+            provider: "codex",
+            label: None,
+            email: Some("me@example.com".to_string()),
+            logins: vec![
+                login(Source::Current, Some("me@example.com"), "/srv/codex", None),
+                login(Source::CodexBar, Some("me@example.com"), "/srv/codexbar/A", None),
+            ],
+        },
+        ListedAccount {
+            provider: "codex",
+            label: Some("work".to_string()),
+            email: None,
+            logins: vec![login(
+                Source::Config,
+                None,
+                "/srv/codex-work",
+                Some(ProviderError::new("No Codex login in /srv/codex-work.", true)),
+            )],
+        },
+    ];
+
+    assert_eq!(
+        account_list(&accounts),
+        "codex\n\
+         \x20 current   me@example.com  /srv/codex\n\
+         \x20 codexbar  me@example.com  /srv/codexbar/A\n\
+         codex (work)\n\
+         \x20 config    not signed in   /srv/codex-work\n"
+    );
 }

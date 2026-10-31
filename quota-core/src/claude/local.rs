@@ -1,8 +1,8 @@
-//! Read-only access to the credentials the Claude Code CLI stores locally.
+//! Access to the credentials the Claude Code CLI stores locally.
 //!
-//! Quota never refreshes or rewrites this file. Rotating the refresh token here
-//! would invalidate the copy Claude Code itself is using and break the user's
-//! CLI, so an expired token is reported rather than renewed.
+//! Everything here only reads. Renewing an expired token lives in
+//! [`super::refresh`], which follows Claude Code's own locking so the two never
+//! fight over the refresh token.
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -82,26 +82,121 @@ impl ClaudeLogin {
         }
     }
 
-    /// Read this login: the credentials file first, then the Keychain item on
-    /// macOS, where Claude Code does not write the file at all.
+    /// Read this login from wherever Claude Code keeps it.
     pub fn read_credentials(&self) -> Result<LocalClaudeCredentials, LocalCredentialError> {
-        let file_result = read_local_credentials_at(&self.credentials_path());
+        let (_, raw) = self.read_stored()?;
+        parse_credentials_json(raw.trim())
+    }
 
+    /// The stored credentials JSON, and the store it came from so a renewed
+    /// token can go back to the same place. On macOS the Keychain item comes
+    /// first and the file is only a fallback, which is the order Claude Code
+    /// reads them in: it writes the file only when the Keychain refuses.
+    pub fn read_stored(&self) -> Result<(CredentialStore, String), LocalCredentialError> {
         #[cfg(target_os = "macos")]
-        if matches!(file_result, Err(LocalCredentialError::NotFound)) {
-            return read_keychain_credentials(&self.keychain_service());
-        }
+        let keychain_error = {
+            let service = self.keychain_service();
+            let account = keychain_account();
+            match read_keychain_item(&service, account.as_deref()) {
+                Ok(raw) => return Ok((CredentialStore::Keychain { service, account }, raw)),
+                Err(LocalCredentialError::NotFound) => None,
+                Err(err) => Some(err),
+            }
+        };
 
-        file_result
+        let path = self.credentials_path();
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => Ok((CredentialStore::File(path), raw)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // A Keychain that could not be read says more than a file
+                // that was never expected to exist.
+                #[cfg(target_os = "macos")]
+                if let Some(err) = keychain_error {
+                    return Err(err);
+                }
+                Err(LocalCredentialError::NotFound)
+            }
+            Err(err) => Err(LocalCredentialError::Unreadable(err.to_string())),
+        }
     }
 
     /// Which account this login is signed in as, so two directories holding
     /// the same account can be told apart from two different accounts. `None`
     /// when Claude Code has not recorded it.
     pub fn account_identity(&self) -> Option<String> {
-        let raw = std::fs::read_to_string(self.account_file_path()?).ok()?;
-        parse_account_identity(&raw)
+        parse_account_identity(&self.read_account_file()?)
     }
+
+    /// The signed-in account as Claude Code recorded it in `.claude.json`.
+    pub fn account_info(&self) -> Option<AccountInfo> {
+        parse_account_info(&self.read_account_file()?)
+    }
+
+    fn read_account_file(&self) -> Option<String> {
+        std::fs::read_to_string(self.account_file_path()?).ok()
+    }
+}
+
+/// Where one login's credentials live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialStore {
+    /// `.credentials.json` inside the config directory.
+    File(PathBuf),
+    /// A macOS Keychain item. `account` is the item's account name, `None`
+    /// when it was found without one.
+    Keychain {
+        service: String,
+        account: Option<String>,
+    },
+}
+
+impl CredentialStore {
+    /// Read this store and no other. Unlike [`ClaudeLogin::read_stored`],
+    /// nothing falls back to a different store, so a compare-and-swap checks
+    /// the store it is about to write.
+    pub fn read(&self) -> Result<String, LocalCredentialError> {
+        match self {
+            Self::File(path) => std::fs::read_to_string(path).map_err(|err| {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    LocalCredentialError::NotFound
+                } else {
+                    LocalCredentialError::Unreadable(err.to_string())
+                }
+            }),
+            #[cfg(target_os = "macos")]
+            Self::Keychain { service, account } => read_keychain_item(service, account.as_deref()),
+            #[cfg(not(target_os = "macos"))]
+            Self::Keychain { .. } => Err(LocalCredentialError::Unreadable(
+                "no Keychain on this system".to_string(),
+            )),
+        }
+    }
+
+    /// Whether a secret of `secret_len` bytes can be written here without it
+    /// appearing in a command line. Only the Keychain has a limit:
+    /// `security -i` reads at most 4032 bytes per command, and the secret
+    /// goes in hex.
+    pub fn fits(&self, secret_len: usize) -> bool {
+        match self {
+            Self::File(_) => true,
+            Self::Keychain { service, account } => {
+                keychain_command_len(service, account.as_deref().unwrap_or("claude-code-user"), secret_len)
+                    <= KEYCHAIN_COMMAND_LIMIT
+            }
+        }
+    }
+}
+
+/// The longest command `security -i` reads from stdin.
+const KEYCHAIN_COMMAND_LIMIT: usize = 4032;
+
+/// The length of the `add-generic-password` command line that stores a
+/// secret of `secret_len` bytes.
+fn keychain_command_len(service: &str, account: &str, secret_len: usize) -> usize {
+    "add-generic-password -U -a \"\" -s \"\" -X \"\"\n".len()
+        + account.len()
+        + service.len()
+        + secret_len * 2
 }
 
 /// The Keychain service Claude Code uses for a login made with
@@ -148,6 +243,37 @@ pub fn parse_account_identity(raw: &str) -> Option<String> {
         account.organization_uuid.unwrap_or_default(),
         account_uuid
     ))
+}
+
+/// The account a login is signed in to, from the `oauthAccount` block of a
+/// `.claude.json` file.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AccountInfo {
+    pub account_uuid: Option<String>,
+    /// Empty for a personal account in some tools; kept as found.
+    pub organization_uuid: Option<String>,
+    pub email: Option<String>,
+}
+
+/// Pull the signed-in account out of a `.claude.json` file. `None` when the
+/// file records no account.
+pub fn parse_account_info(raw: &str) -> Option<AccountInfo> {
+    let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let account = parsed.get("oauthAccount")?;
+    let text = |key: &str| {
+        account
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let info = AccountInfo {
+        account_uuid: text("accountUuid"),
+        organization_uuid: text("organizationUuid"),
+        email: text("emailAddress"),
+    };
+    (info.account_uuid.is_some() || info.email.is_some()).then_some(info)
 }
 
 #[derive(Clone)]
@@ -285,18 +411,37 @@ pub fn read_local_credentials() -> Result<LocalClaudeCredentials, LocalCredentia
         .read_credentials()
 }
 
-/// Read the Keychain item through `/usr/bin/security`. Claude Code writes the
-/// item with that same tool, so its access list already allows this read and
-/// no unlock prompt appears. Read-only: nothing is ever stored or deleted.
+/// The account name Claude Code files its Keychain items under: the login
+/// name, or a fixed stand-in when that has characters it does not accept.
+/// `None` when no login name is set, in which case any account matches.
 #[cfg(target_os = "macos")]
-fn read_keychain_credentials(
-    service: &str,
-) -> Result<LocalClaudeCredentials, LocalCredentialError> {
-    // `security` exits with 44 when no item matches the service.
+fn keychain_account() -> Option<String> {
+    let user = std::env::var("USER").ok().filter(|user| !user.is_empty())?;
+    let usable = user
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    Some(if usable {
+        user
+    } else {
+        "claude-code-user".to_string()
+    })
+}
+
+/// Read a Keychain item through `/usr/bin/security`. Claude Code writes the
+/// item with that same tool, so its access list already allows this read and
+/// no unlock prompt appears.
+#[cfg(target_os = "macos")]
+fn read_keychain_item(service: &str, account: Option<&str>) -> Result<String, LocalCredentialError> {
+    // `security` exits with 44 when no item matches.
     const ITEM_NOT_FOUND: i32 = 44;
 
-    let output = std::process::Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", service, "-w"])
+    let mut command = std::process::Command::new("/usr/bin/security");
+    command.arg("find-generic-password");
+    if let Some(account) = account {
+        command.args(["-a", account]);
+    }
+    let output = command
+        .args(["-s", service, "-w"])
         .output()
         .map_err(|err| LocalCredentialError::Unreadable(err.to_string()))?;
 
@@ -307,8 +452,84 @@ fn read_keychain_credentials(
         });
     }
 
-    let raw = String::from_utf8(output.stdout).map_err(|_| {
-        LocalCredentialError::Malformed("Keychain item is not UTF-8".to_string())
-    })?;
-    parse_credentials_json(raw.trim())
+    String::from_utf8(output.stdout)
+        .map(|raw| raw.trim().to_string())
+        .map_err(|_| LocalCredentialError::Malformed("Keychain item is not UTF-8".to_string()))
+}
+
+/// Replace a Keychain item's secret the way Claude Code does: through
+/// `security -i`, so the secret travels on stdin instead of in an argument
+/// list other processes can read. Updating with the same tool that created the
+/// item keeps its access list unchanged. A secret too long for one stdin
+/// command is refused; Claude Code would put it on the command line instead.
+#[cfg(target_os = "macos")]
+pub(crate) fn write_keychain_item(
+    service: &str,
+    account: Option<&str>,
+    secret: &str,
+) -> Result<(), String> {
+    use std::io::Write;
+
+    let account = match account {
+        Some(account) => account.to_string(),
+        None => keychain_item_account(service)
+            .ok_or_else(|| "could not tell which Keychain account holds the login".to_string())?,
+    };
+    if service.contains('"') || account.contains('"') {
+        return Err("unexpected quote in Keychain item name".to_string());
+    }
+    if keychain_command_len(service, &account, secret.len()) > KEYCHAIN_COMMAND_LIMIT {
+        return Err("the login is too long to hand to `security` without a command line".to_string());
+    }
+    let hex: String = secret.bytes().map(|byte| format!("{:02x}", byte)).collect();
+    let line = format!(
+        "add-generic-password -U -a \"{}\" -s \"{}\" -X \"{}\"\n",
+        account, service, hex
+    );
+
+    let mut child = std::process::Command::new("/usr/bin/security")
+        .arg("-i")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|err| err.to_string())?;
+    let written = child
+        .stdin
+        .take()
+        .map(|mut stdin| stdin.write_all(line.as_bytes()))
+        .unwrap_or(Ok(()));
+    let status = child.wait().map_err(|err| err.to_string())?;
+    written.map_err(|err| err.to_string())?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("security exited with {}", status))
+    }
+}
+
+/// The account name of the Keychain item filed under `service`, read from the
+/// item's attributes. The secret itself is not requested.
+#[cfg(target_os = "macos")]
+fn keychain_item_account(service: &str) -> Option<String> {
+    let output = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", service])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_keychain_account_attribute(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Find the `"acct"<blob>="..."` line in `security find-generic-password`
+/// output.
+pub fn parse_keychain_account_attribute(attributes: &str) -> Option<String> {
+    attributes.lines().find_map(|line| {
+        let value = line.trim().strip_prefix("\"acct\"<blob>=\"")?;
+        let value = value.strip_suffix('"')?;
+        (!value.is_empty()).then(|| value.to_string())
+    })
 }

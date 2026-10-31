@@ -195,3 +195,105 @@ fn reads_the_signed_in_account_from_the_claude_json_file() {
     assert_eq!(parse_account_identity(r#"{"numStartups": 3}"#), None);
     assert_eq!(parse_account_identity("not json"), None);
 }
+
+#[test]
+fn reads_the_account_and_its_address_from_the_claude_json_file() {
+    use quota_core::claude::local::{parse_account_info, AccountInfo};
+
+    let raw = r#"{"oauthAccount": {
+        "accountUuid": "account-1",
+        "organizationUuid": "org-1",
+        "emailAddress": " someone@example.com "
+    }}"#;
+    assert_eq!(
+        parse_account_info(raw),
+        Some(AccountInfo {
+            account_uuid: Some("account-1".to_string()),
+            organization_uuid: Some("org-1".to_string()),
+            email: Some("someone@example.com".to_string()),
+        })
+    );
+    assert_eq!(parse_account_info(r#"{"oauthAccount": {}}"#), None);
+    assert_eq!(parse_account_info(r#"{"numStartups": 3}"#), None);
+}
+
+#[test]
+fn finds_the_account_name_in_keychain_item_attributes() {
+    use quota_core::claude::local::parse_keychain_account_attribute;
+
+    // What `security find-generic-password -s <service>` prints, minus the
+    // secret, which it only prints when asked.
+    let attributes = r#"keychain: "/Users/test/Library/Keychains/login.keychain-db"
+version: 512
+class: "genp"
+attributes:
+    0x00000007 <blob>="Claude Code-credentials"
+    "acct"<blob>="someone"
+    "svce"<blob>="Claude Code-credentials"
+"#;
+    assert_eq!(
+        parse_keychain_account_attribute(attributes).as_deref(),
+        Some("someone")
+    );
+    assert_eq!(parse_keychain_account_attribute("attributes:\n"), None);
+}
+
+#[test]
+fn a_renewal_keeps_what_claude_code_stored_and_replaces_the_tokens() {
+    use quota_core::claude::refresh::{apply_token_response, TokenResponse};
+
+    let mut document = serde_json::json!({
+        "claudeAiOauth": {
+            "accessToken": "old", "refreshToken": "old-refresh", "expiresAt": 1,
+            "scopes": ["user:inference"], "subscriptionType": "pro"
+        },
+        "trustedDeviceToken": "keep"
+    });
+    let response = TokenResponse {
+        access_token: "new".to_string(),
+        refresh_token: None,
+        expires_in: Some(60),
+        refresh_token_expires_in: None,
+        scope: Some("user:inference user:profile".to_string()),
+    };
+    apply_token_response(&mut document, &response, "old-refresh", 1_000).expect("apply");
+
+    let oauth = &document["claudeAiOauth"];
+    assert_eq!(oauth["accessToken"], "new");
+    assert_eq!(oauth["refreshToken"], "old-refresh");
+    assert_eq!(oauth["expiresAt"], 61_000);
+    assert_eq!(oauth["scopes"], serde_json::json!(["user:inference", "user:profile"]));
+    assert_eq!(oauth["subscriptionType"], "pro");
+    assert!(oauth.get("refreshTokenExpiresAt").is_none());
+    assert_eq!(document["trustedDeviceToken"], "keep");
+}
+
+#[test]
+fn only_a_refused_refresh_token_asks_for_a_new_sign_in() {
+    use quota_core::claude::refresh::classify_failure;
+
+    assert!(classify_failure(400, r#"{"error":"invalid_grant"}"#).needs_sign_in());
+    assert!(classify_failure(401, "").needs_sign_in());
+    assert!(!classify_failure(400, r#"{"error":"invalid_request"}"#).needs_sign_in());
+    assert!(!classify_failure(500, "oops").needs_sign_in());
+    assert!(!classify_failure(429, "").needs_sign_in());
+    // Only the code is quoted, never the body.
+    let message = classify_failure(503, r#"{"error":"overloaded","detail":"secret-ish"}"#).to_string();
+    assert!(message.contains("overloaded"));
+    assert!(!message.contains("secret-ish"));
+}
+
+#[test]
+fn a_login_too_long_for_one_security_command_does_not_fit_the_keychain() {
+    use quota_core::claude::local::CredentialStore;
+
+    let keychain = CredentialStore::Keychain {
+        service: "Claude Code-credentials".to_string(),
+        account: Some("someone".to_string()),
+    };
+    // The secret goes in hex, so each byte takes two characters of the
+    // 4032-byte command `security -i` reads.
+    assert!(keychain.fits(1_900));
+    assert!(!keychain.fits(2_100));
+    assert!(CredentialStore::File("/tmp/x/.credentials.json".into()).fits(1_000_000));
+}

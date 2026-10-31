@@ -16,7 +16,7 @@ const BETA_HEADER: &str = "oauth-2025-04-20";
 /// with `claude-cli/`. Any other client gets `ineligible_reason: "surface"` and
 /// no grants. So this leads with Claude Code's product token, and keeps quota's
 /// own token after it, so the request still says which tool sent it.
-const USER_AGENT: &str = concat!(
+pub(crate) const USER_AGENT: &str = concat!(
     "claude-cli/2.1.289 (external, cli) quota/",
     env!("CARGO_PKG_VERSION")
 );
@@ -94,7 +94,11 @@ fn window_from(label: &str, block: Option<&Value>) -> UsageWindow {
 #[derive(Debug)]
 pub enum LocalUsageError {
     Credentials(LocalCredentialError),
+    /// HTTP 401: the token is no good. Renewing it can help.
     Unauthorized,
+    /// HTTP 403: the request was refused for another reason, such as a
+    /// missing permission or a bot check. Renewing the token does not help.
+    Forbidden,
     Request(String),
 }
 
@@ -112,6 +116,10 @@ impl std::fmt::Display for LocalUsageError {
             Self::Unauthorized => write!(
                 formatter,
                 "Claude rejected the stored token. Run the Claude Code CLI to refresh it."
+            ),
+            Self::Forbidden => write!(
+                formatter,
+                "Claude refused the usage request (HTTP 403)."
             ),
             Self::Request(detail) => write!(formatter, "Claude usage request failed: {}", detail),
         }
@@ -147,8 +155,11 @@ pub async fn fetch_usage(
         .await
         .map_err(|err| LocalUsageError::Request(err.to_string()))?;
 
-    if status.as_u16() == 401 || status.as_u16() == 403 {
+    if status.as_u16() == 401 {
         return Err(LocalUsageError::Unauthorized);
+    }
+    if status.as_u16() == 403 {
+        return Err(LocalUsageError::Forbidden);
     }
     if !status.is_success() {
         return Err(LocalUsageError::Request(format!(

@@ -7,10 +7,15 @@ All notable changes to this project will be documented here.
 ### 🖥️ quota-cli
 
 - `usage` leaves out providers you are not signed into, and logins with nothing to show. `--all` lists them again, with the reason.
-- `usage --json` now has one record per login, including the ones without a login, with `status` (`ok`, `not_configured`, `error`), `label`, `resets`, and `error` on every record.
-- Banked limit resets show for Codex (`rate_limit_reset_credits`) and Claude (the `cedar_ember` grants, with their end date). Claude only reports these to a `claude-cli/` user agent, so the Claude usage call now sends `claude-cli/<version> (external, cli) quota/<version>`.
-- An optional config file, `~/.config/quota-cli/config.toml`, lists more Claude logins (by `CLAUDE_CONFIG_DIR`) and Codex logins (by `CODEX_HOME`), each with a label. The login each CLI is using now is merged with a configured entry for the same account.
-- The Claude reader honors `CLAUDE_CONFIG_DIR`, including the Keychain item Claude Code names after it.
+- `usage --json` now has one record per account, including the ones without a login, with `status` (`ok`, `not_configured`, `error`), `label`, `email`, `sources`, `resets`, and `error` on every record.
+- `usage claude codex` checks only the named providers.
+- Banked limit resets show for Codex (`rate_limit_reset_credits`, with expiry dates from `/wham/rate-limit-reset-credits`) and Claude (the `cedar_ember` grants, with their end date). Claude only reports these to a `claude-cli/` user agent, so the Claude usage call now sends `claude-cli/<version> (external, cli) quota/<version>`.
+- More Claude and Codex accounts. `quota-cli accounts add claude|codex <label>` signs in to another account in a directory under the data directory (`~/Library/Application Support/quota-cli` on macOS, `QUOTA_CLI_DATA_DIR` moves it) by running the provider's own sign-in with `CLAUDE_CONFIG_DIR` or `CODEX_HOME` set. `accounts remove` deletes one again, and `accounts` lists every login found and where.
+- An optional config file, `~/.config/quota-cli/config.toml`, lists more Claude logins (by `CLAUDE_CONFIG_DIR`) and Codex logins (by `CODEX_HOME`), each with a label.
+- CodexBar's Codex accounts and claude-swap's Claude accounts are picked up when those tools are installed. claude-swap's are read through `cswap --list --json`, so its tokens are never touched. `[sources]` in the config file turns either off.
+- Every account is shown once, however many places it was found in. Claude accounts are matched by email and organization, Codex accounts by workspace and email.
+- Expired Claude and Codex tokens are renewed before usage is fetched, and once more when the usage API rejects a token with a 401, following each CLI's own locking so the CLI adopts the new token. Anything that could stop the result from being saved is checked before the refresh token is sent, and a renewed login that still cannot be saved is kept in `<file>.quota-renewed`. This replaces the earlier rule that the CLI never renews anything.
+- The Claude reader honors `CLAUDE_CONFIG_DIR`, including the Keychain item Claude Code names after it, and reads the Keychain before `.credentials.json` on macOS, as Claude Code does.
 
 ### 🔒 Security
 

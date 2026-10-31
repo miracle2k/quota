@@ -4,7 +4,7 @@
 //! percent-only. A terminal has room, so the text report labels each percent
 //! as what's left, like the desktop app's default, and spells out the reset time.
 
-use crate::accounts::AccountReport;
+use crate::accounts::{AccountReport, ListedAccount, Login};
 use quota_core::usage::{LimitResets, ProviderUsage, UsageWindow};
 use serde::Serialize;
 
@@ -47,8 +47,8 @@ pub fn usage_detail(usage: &ProviderUsage, now: i64) -> Option<String> {
     }
 }
 
-/// The name a report line starts with: the provider, plus the label from the
-/// config file when the login has one.
+/// The name a report line starts with: the provider, plus the account's label
+/// or address when it has one.
 pub fn account_name(provider: &str, label: Option<&str>) -> String {
     match label {
         Some(label) => format!("{} ({})", provider, label),
@@ -56,9 +56,10 @@ pub fn account_name(provider: &str, label: Option<&str>) -> String {
     }
 }
 
-/// Whether the text report shows a login. Without `--all` it leaves out
-/// providers that are not set up here and logins with nothing to show. A login
-/// from the config file always shows, so a mistake in the file is visible.
+/// Whether the text report shows an account. Without `--all` it leaves out
+/// providers that are not set up here and logins with nothing to show. An
+/// account set up for quota-cli, through `accounts add` or the config file,
+/// always shows, so a mistake there is visible.
 pub fn shown_in_text(report: &AccountReport, now: i64, all: bool) -> bool {
     if all || report.is_configured() {
         return true;
@@ -69,15 +70,20 @@ pub fn shown_in_text(report: &AccountReport, now: i64, all: bool) -> bool {
     }
 }
 
-/// One JSON record per login, including the ones that failed or are not set
+/// One JSON record per account, including the ones that failed or are not set
 /// up, so a script sees what was checked. Every record has every field, so a
 /// script can read `windows` without checking `status` first.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageRecord<'a> {
     pub provider: &'a str,
-    /// The config file's label, `null` for a login found the usual way.
+    /// The name shown for the account: a label, an alias, or the address.
+    /// `null` for the login the provider's CLI uses now.
     pub label: Option<&'a str>,
+    pub email: Option<&'a str>,
+    /// Where the account was found: `current`, `quota-cli`, `config`,
+    /// `codexbar`, `claude-swap`.
+    pub sources: Vec<&'static str>,
     /// `ok`, `not_configured`, or `error`.
     pub status: &'static str,
     pub account_label: Option<&'a str>,
@@ -91,6 +97,8 @@ pub fn usage_record(report: &AccountReport) -> UsageRecord<'_> {
     let base = UsageRecord {
         provider: report.provider,
         label: report.label.as_deref(),
+        email: report.email.as_deref(),
+        sources: report.sources.iter().map(|source| source.name()).collect(),
         status: "ok",
         account_label: None,
         windows: &[],
@@ -115,6 +123,128 @@ pub fn usage_record(report: &AccountReport) -> UsageRecord<'_> {
             error: Some(&err.message),
             ..base
         },
+    }
+}
+
+/// `accounts list` as text: each account's name, then one line per login of
+/// it: where it was found, whose it is, and where it lives.
+pub fn account_list(accounts: &[ListedAccount]) -> String {
+    let rows: Vec<(String, String, String)> = accounts
+        .iter()
+        .flat_map(|account| account.logins.iter())
+        .map(|login| {
+            (
+                login.source.name().to_string(),
+                login_state(login),
+                login
+                    .location
+                    .as_deref()
+                    .map(shorten_home)
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
+    let source_width = rows.iter().map(|row| row.0.len()).max().unwrap_or(0);
+    let state_width = rows
+        .iter()
+        .map(|row| row.1.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let mut out = String::new();
+    let mut rows = rows.into_iter();
+    for account in accounts {
+        out.push_str(&account_name(account.provider, account.label.as_deref()));
+        out.push('\n');
+        for _ in &account.logins {
+            let (source, state, location) = rows.next().unwrap_or_default();
+            let line = format!(
+                "  {:<source_width$}  {:<state_width$}  {}",
+                source,
+                state,
+                location,
+                source_width = source_width,
+                state_width = state_width
+            );
+            out.push_str(line.trim_end());
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// The login's address, or why it cannot be used.
+fn login_state(login: &Login) -> String {
+    match &login.problem {
+        Some(problem) if problem.not_configured => "not signed in".to_string(),
+        Some(_) => "unusable (`usage` says why)".to_string(),
+        None => login
+            .email
+            .clone()
+            .unwrap_or_else(|| "signed in".to_string()),
+    }
+}
+
+/// `accounts list --json`: one record per account, each with its logins.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListedRecord<'a> {
+    pub provider: &'a str,
+    pub label: Option<&'a str>,
+    pub email: Option<&'a str>,
+    pub logins: Vec<ListedLogin<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListedLogin<'a> {
+    pub source: &'static str,
+    /// Its own label: a quota-cli or config file label, or a claude-swap alias.
+    pub label: Option<&'a str>,
+    pub email: Option<&'a str>,
+    pub location: Option<&'a str>,
+    /// `ok`, `not_configured`, or `error`.
+    pub status: &'static str,
+    pub error: Option<&'a str>,
+}
+
+pub fn listed_record(account: &ListedAccount) -> ListedRecord<'_> {
+    ListedRecord {
+        provider: account.provider,
+        label: account.label.as_deref(),
+        email: account.email.as_deref(),
+        logins: account
+            .logins
+            .iter()
+            .map(|login| ListedLogin {
+                source: login.source.name(),
+                label: login.label.as_deref(),
+                email: login.email.as_deref(),
+                location: login.location.as_deref(),
+                status: match &login.problem {
+                    None => "ok",
+                    Some(problem) if problem.not_configured => "not_configured",
+                    Some(_) => "error",
+                },
+                error: login
+                    .problem
+                    .as_ref()
+                    .map(|problem| problem.message.as_str()),
+            })
+            .collect(),
+    }
+}
+
+/// Write a path under the home directory with `~`, the way it is typed.
+pub fn shorten_home(path: &str) -> String {
+    let Some(home) = dirs::home_dir() else {
+        return path.to_string();
+    };
+    let home = home.to_string_lossy();
+    match path.strip_prefix(home.as_ref()) {
+        Some("") => "~".to_string(),
+        Some(rest) if rest.starts_with('/') => format!("~{}", rest),
+        _ => path.to_string(),
     }
 }
 

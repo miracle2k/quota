@@ -15,15 +15,39 @@ async fn main() {
 
     match command {
         Command::Help => println!("{}", HELP),
-        Command::Usage { json, all } => run_usage(json, all).await,
+        Command::Usage {
+            json,
+            all,
+            providers,
+        } => run_usage(json, all, &providers).await,
+        Command::AccountsList { json } => run_accounts_list(json).await,
+        Command::AccountsAdd {
+            provider,
+            label,
+            device_auth,
+        } => finish(quota_cli::manage::add(&provider, &label, device_auth)),
+        Command::AccountsRemove { provider, label } => {
+            finish(quota_cli::manage::remove(&provider, &label))
+        }
         Command::HerdrReport { force } => run_herdr_report(force).await,
         Command::HerdrWatch { interval_secs } => run_herdr_watch(interval_secs).await,
     }
 }
 
-async fn run_usage(json: bool, all: bool) {
-    use quota_cli::render;
+/// Print a command's outcome and exit non-zero when it failed.
+fn finish(result: Result<String, String>) {
+    match result {
+        Ok(message) => println!("{}", message),
+        Err(message) => {
+            eprintln!("{}", message);
+            std::process::exit(1);
+        }
+    }
+}
 
+/// The config file and quota-cli's own account list. Either one being broken
+/// is a mistake worth stopping for, since an account would silently go missing.
+fn load_sources() -> (quota_cli::config::Config, quota_cli::store::Registry) {
     let config = match quota_cli::config::load() {
         Ok(config) => config,
         Err(message) => {
@@ -31,8 +55,55 @@ async fn run_usage(json: bool, all: bool) {
             std::process::exit(2);
         }
     };
+    let registry = match quota_cli::store::data_dir() {
+        Some(dir) => match quota_cli::store::load(&dir) {
+            Ok(registry) => registry,
+            Err(message) => {
+                eprintln!("accounts: {}", message);
+                std::process::exit(2);
+            }
+        },
+        None => Default::default(),
+    };
+    (config, registry)
+}
 
-    let reports = quota_cli::accounts::fetch_all(&config).await;
+async fn run_accounts_list(json: bool) {
+    use quota_cli::render;
+
+    let (config, registry) = load_sources();
+    let accounts = quota_cli::accounts::list_accounts(&config, &registry).await;
+    if json {
+        let records: Vec<_> = accounts.iter().map(render::listed_record).collect();
+        match serde_json::to_string_pretty(&records) {
+            Ok(rendered) => println!("{}", rendered),
+            Err(err) => {
+                eprintln!("could not render JSON: {}", err);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    print!("{}", render::account_list(&accounts));
+    if let Some(dir) = quota_cli::store::data_dir() {
+        println!(
+            "\nAccounts added with `quota-cli accounts add` live in {}",
+            render::shorten_home(&dir.display().to_string())
+        );
+    }
+}
+
+async fn run_usage(json: bool, all: bool, providers: &[String]) {
+    use quota_cli::render;
+
+    let (config, registry) = load_sources();
+    let providers: Vec<&'static str> = quota_core::providers::PROVIDERS
+        .iter()
+        .copied()
+        .filter(|known| providers.iter().any(|wanted| wanted == known))
+        .collect();
+
+    let reports = quota_cli::accounts::fetch_all(&config, &registry, &providers).await;
     let any_succeeded = reports.iter().any(|report| report.result.is_ok());
 
     if json {

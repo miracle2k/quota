@@ -1,6 +1,8 @@
 //! Covers the config file that lists extra Claude and Codex logins.
 
-use quota_cli::config::{expand_home, load_from, parse, ClaudeAccount, CodexAccount, Config};
+use quota_cli::config::{
+    expand_home, load_from, parse, ClaudeAccount, CodexAccount, Config, Sources,
+};
 
 #[test]
 fn parses_extra_claude_and_codex_logins() {
@@ -39,8 +41,22 @@ fn parses_extra_claude_and_codex_logins() {
                     home: "/srv/codex-client".to_string(),
                 },
             ],
+            sources: Sources::default(),
         }
     );
+}
+
+#[test]
+fn other_tools_are_read_unless_turned_off() {
+    let config = parse("").expect("parse");
+    assert!(config.sources.codexbar);
+    assert!(config.sources.claude_swap);
+
+    let config = parse("[sources]\nclaude_swap = false\n").expect("parse");
+    assert!(config.sources.codexbar);
+    assert!(!config.sources.claude_swap);
+
+    assert!(parse("[sources]\ncodex_bar = false\n").is_err());
 }
 
 #[test]

@@ -7,6 +7,9 @@ use serde_json::Value;
 use super::local::{read_local_credentials, LocalCodexCredentials, LocalCredentialError};
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+/// Lists each banked reset with its expiry. Read-only: redeeming one is a
+/// separate POST that this reader never sends.
+const RESET_CREDITS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
 /// Convert the raw usage payload into the two windows the sidebar shows.
 ///
@@ -36,8 +39,8 @@ pub fn normalize_usage_response(raw: &Value, account_label: Option<String>) -> P
 }
 
 /// Banked usage-limit resets, which the payload counts in
-/// `rate_limit_reset_credits`. The count carries no expiry; that needs a
-/// separate call, which this reader does not make.
+/// `rate_limit_reset_credits`. The count carries no expiry; [`fetch_usage`]
+/// asks for that separately when there is a reset to ask about.
 fn limit_resets(raw: &Value) -> Option<LimitResets> {
     let count = raw
         .get("rate_limit_reset_credits")?
@@ -106,7 +109,11 @@ fn reset_at(block: Option<&Value>) -> Option<i64> {
 #[derive(Debug)]
 pub enum LocalUsageError {
     Credentials(LocalCredentialError),
+    /// HTTP 401: the token is no good. Renewing it can help.
     Unauthorized,
+    /// HTTP 403: the request was refused for another reason, such as a
+    /// missing permission or a bot check. Renewing the token does not help.
+    Forbidden,
     Request(String),
 }
 
@@ -128,6 +135,10 @@ impl std::fmt::Display for LocalUsageError {
             Self::Unauthorized => write!(
                 formatter,
                 "Codex rejected the stored token. Run the Codex CLI to refresh it."
+            ),
+            Self::Forbidden => write!(
+                formatter,
+                "Codex refused the usage request (HTTP 403)."
             ),
             Self::Request(detail) => write!(formatter, "Codex usage request failed: {}", detail),
         }
@@ -169,8 +180,11 @@ pub async fn fetch_usage(
         .await
         .map_err(|err| LocalUsageError::Request(err.to_string()))?;
 
-    if status.as_u16() == 401 || status.as_u16() == 403 {
+    if status.as_u16() == 401 {
         return Err(LocalUsageError::Unauthorized);
+    }
+    if status.as_u16() == 403 {
+        return Err(LocalUsageError::Forbidden);
     }
     if !status.is_success() {
         return Err(LocalUsageError::Request(format!(
@@ -183,5 +197,61 @@ pub async fn fetch_usage(
     let raw: Value =
         serde_json::from_str(&body).map_err(|err| LocalUsageError::Request(err.to_string()))?;
 
-    Ok(normalize_usage_response(&raw, credentials.plan.clone()))
+    let mut usage = normalize_usage_response(&raw, credentials.plan.clone());
+    if usage.resets.as_ref().is_some_and(|resets| resets.available > 0) {
+        // The expiry is a detail. Without it the count still stands.
+        if let Some(listed) = fetch_reset_credits(credentials).await {
+            usage.resets = Some(listed);
+        }
+    }
+    Ok(usage)
+}
+
+async fn fetch_reset_credits(credentials: &LocalCodexCredentials) -> Option<LimitResets> {
+    let mut request = reqwest::Client::new()
+        .get(RESET_CREDITS_URL)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", credentials.access_token),
+        )
+        .header(reqwest::header::USER_AGENT, "quota");
+    if let Some(account_id) = credentials.account_id.as_deref() {
+        request = request.header("ChatGPT-Account-Id", account_id);
+    }
+    let response = request.send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let raw: Value = response.json().await.ok()?;
+    reset_credits_from(&raw, chrono::Utc::now().timestamp())
+}
+
+/// Count the resets still usable in a reset-credit list, and find the soonest
+/// expiry among them. A credit without an expiry never lapses.
+pub fn reset_credits_from(raw: &Value, now: i64) -> Option<LimitResets> {
+    let credits = raw.get("credits")?.as_array()?;
+    let mut available: u32 = 0;
+    let mut expires_at: Option<i64> = None;
+    for credit in credits {
+        if credit.get("status").and_then(Value::as_str) != Some("available") {
+            continue;
+        }
+        let expiry = credit
+            .get("expires_at")
+            .and_then(Value::as_str)
+            .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+            .map(|stamp| stamp.timestamp());
+        if expiry.is_some_and(|expiry| expiry <= now) {
+            continue;
+        }
+        available = available.saturating_add(1);
+        if let Some(expiry) = expiry {
+            expires_at = Some(expires_at.map_or(expiry, |soonest| soonest.min(expiry)));
+        }
+    }
+    Some(LimitResets {
+        available,
+        expires_at,
+    })
 }

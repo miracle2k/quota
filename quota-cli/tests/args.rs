@@ -13,7 +13,8 @@ fn usage_defaults_to_human_output() {
         parsed,
         Command::Usage {
             json: false,
-            all: false
+            all: false,
+            providers: vec![]
         }
     );
 }
@@ -25,7 +26,8 @@ fn usage_accepts_the_json_flag() {
         parsed,
         Command::Usage {
             json: true,
-            all: false
+            all: false,
+            providers: vec![]
         }
     );
 }
@@ -36,14 +38,16 @@ fn usage_accepts_the_all_flag_alone_or_with_json() {
         parse_args(&argv(&["usage", "--all"])),
         Ok(Command::Usage {
             json: false,
-            all: true
+            all: true,
+            providers: vec![]
         })
     );
     assert_eq!(
         parse_args(&argv(&["usage", "--all", "--json"])),
         Ok(Command::Usage {
             json: true,
-            all: true
+            all: true,
+            providers: vec![]
         })
     );
 }
@@ -136,4 +140,76 @@ fn an_interval_flag_without_a_value_is_an_error() {
 fn an_unknown_watch_flag_is_an_error_naming_the_flag() {
     let error = parse_args(&argv(&["herdr", "watch", "--nope"])).expect_err("should reject");
     assert!(error.contains("--nope"));
+}
+
+#[test]
+fn usage_can_name_the_providers_to_check() {
+    assert_eq!(
+        parse_args(&argv(&["usage", "codex", "claude", "codex", "--json"])),
+        Ok(Command::Usage {
+            json: true,
+            all: false,
+            providers: vec!["codex".to_string(), "claude".to_string()]
+        })
+    );
+    let error = parse_args(&argv(&["usage", "gemini"])).expect_err("should reject");
+    assert!(error.contains("gemini"));
+}
+
+#[test]
+fn accounts_lists_by_default() {
+    assert_eq!(
+        parse_args(&argv(&["accounts"])),
+        Ok(Command::AccountsList { json: false })
+    );
+    assert_eq!(
+        parse_args(&argv(&["accounts", "--json"])),
+        Ok(Command::AccountsList { json: true })
+    );
+    assert_eq!(
+        parse_args(&argv(&["accounts", "list", "--json"])),
+        Ok(Command::AccountsList { json: true })
+    );
+}
+
+#[test]
+fn accounts_add_and_remove_take_a_provider_and_a_label() {
+    assert_eq!(
+        parse_args(&argv(&["accounts", "add", "codex", "work", "--device-auth"])),
+        Ok(Command::AccountsAdd {
+            provider: "codex".to_string(),
+            label: "work".to_string(),
+            device_auth: true
+        })
+    );
+    assert_eq!(
+        parse_args(&argv(&["accounts", "add", "claude", " Client A "])),
+        Ok(Command::AccountsAdd {
+            provider: "claude".to_string(),
+            label: "Client A".to_string(),
+            device_auth: false
+        })
+    );
+    assert_eq!(
+        parse_args(&argv(&["accounts", "remove", "claude", "work"])),
+        Ok(Command::AccountsRemove {
+            provider: "claude".to_string(),
+            label: "work".to_string()
+        })
+    );
+}
+
+#[test]
+fn accounts_rejects_what_it_cannot_do() {
+    for args in [
+        &["accounts", "add", "cursor", "work"][..],
+        &["accounts", "add", "codex"][..],
+        &["accounts", "add", "codex", "  "][..],
+        &["accounts", "add", "claude", "work", "--device-auth"][..],
+        &["accounts", "remove", "codex", "work", "--device-auth"][..],
+        &["accounts", "list", "extra"][..],
+        &["accounts", "rename", "codex", "work"][..],
+    ] {
+        assert!(parse_args(&argv(args)).is_err(), "{:?}", args);
+    }
 }

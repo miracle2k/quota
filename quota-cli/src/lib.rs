@@ -1,5 +1,9 @@
 pub mod accounts;
 pub mod args;
+pub mod claude_swap;
+pub mod codexbar;
 pub mod config;
 pub mod herdr;
+pub mod manage;
 pub mod render;
+pub mod store;

@@ -2,7 +2,9 @@
 
 Read your AI usage from the credentials your agent CLIs already stored.
 
-`quota-cli` prints how much quota you have left across Claude, Codex, Cursor, Antigravity, Grok, and Kiro. It reads each provider's token from wherever that provider's own CLI keeps it, so there is no sign-in step and no account to connect. If you are logged into Claude Code, you get Claude numbers. If you are not, Claude is left out of the report. An optional config file adds more Claude and Codex logins.
+`quota-cli` prints how much quota you have left across Claude, Codex, Cursor, Antigravity, Grok, and Kiro. It reads each provider's token from wherever that provider's own CLI keeps it, so there is no sign-in step and no account to connect. If you are logged into Claude Code, you get Claude numbers. If you are not, Claude is left out of the report.
+
+Claude and Codex can have more than one account: `quota-cli accounts add` signs in to another one, and the accounts that [CodexBar](https://github.com/steipete/CodexBar) and [claude-swap](https://github.com/realiti4/claude-swap) manage are picked up as well. See [More Claude and Codex accounts](#more-claude-and-codex-accounts).
 
 It is part of [Quota](https://github.com/pinkpixel-dev/quota), a desktop app that does the same thing with a UI. The CLI is standalone and does not need the app installed or running.
 
@@ -21,11 +23,12 @@ quota-cli usage
 ```
 
 ```text
-claude          5h 98% left (resets in 4h 58m) · Wk 35% left (resets in 3d 9h)
-claude (work)   Wk 12% left (resets in 2d 4h) · 1 reset available (expires in 9d 2h)
-codex           5h 100% left (resets in 4h 59m) · Wk 95% left (resets in 4d 6h)
-codex (client)  5h 0% left (resets in 1h 10m) · Wk 60% left (resets in 4d 6h) · 2 resets available
-kiro            Credits 100% left · Bonus 100% left
+claude                    5h 98% left (resets in 4h 58m) · Wk 35% left (resets in 3d 9h)
+claude (work)             Wk 12% left (resets in 2d 4h) · 1 reset available (expires in 9d 2h)
+codex                     5h 100% left (resets in 4h 59m) · Wk 95% left (resets in 4d 6h)
+codex (client)            5h 0% left (resets in 1h 10m) · Wk 60% left (resets in 4d 6h) · 2 resets available (next expires in 6d 4h)
+codex (me@example.com)    Wk 94% left (resets in 5d)
+kiro                      Credits 100% left · Bonus 100% left
 ```
 
 Percentages are what you have left, not what you have used. Reset times show when a provider reports one, and Kiro currently does not. Banked limit resets show when an account has at least one, see [Limit resets](#limit-resets).
@@ -36,7 +39,13 @@ Providers you are not signed into are left out, and so is a login with nothing t
 quota-cli usage --all
 ```
 
-For scripting, `--json` prints one record per login, including the ones `--all` would add:
+Name providers to check only those:
+
+```bash
+quota-cli usage claude codex
+```
+
+For scripting, `--json` prints one record per account, including the ones `--all` would add:
 
 ```bash
 quota-cli usage --json
@@ -47,6 +56,8 @@ quota-cli usage --json
   {
     "provider": "codex",
     "label": "client",
+    "email": "client@example.com",
+    "sources": ["quota-cli", "codexbar"],
     "status": "ok",
     "accountLabel": "pro",
     "windows": [
@@ -54,12 +65,14 @@ quota-cli usage --json
       { "label": "Wk", "remainingPercent": 60, "resetAt": 1793836800 }
     ],
     "note": null,
-    "resets": { "available": 2, "expiresAt": null },
+    "resets": { "available": 2, "expiresAt": 1794067200 },
     "error": null
   },
   {
     "provider": "cursor",
     "label": null,
+    "email": null,
+    "sources": ["current"],
     "status": "not_configured",
     "accountLabel": null,
     "windows": [],
@@ -70,20 +83,58 @@ quota-cli usage --json
 ]
 ```
 
-Every record has every field. `status` is `ok`, `not_configured` (no login here, or one with no usage to measure), or `error`. `label` is the label from the config file, and `null` for a login found the usual way. `resets` is `null` when the provider has no such thing or did not say.
+Every record has every field. `status` is `ok`, `not_configured` (no login here, or one with no usage to measure), or `error`. `label` is the name the account is shown under: a label you gave it, a claude-swap alias, or its email address, and `null` for the login the provider's CLI uses now. `sources` lists every place the account was found: `current`, `quota-cli`, `config`, `codexbar`, `claude-swap`. `resets` is `null` when the provider has no such thing or did not say.
 
 The command exits non-zero only when no login at all could report, since one signed-out provider on an otherwise working machine is not a failure.
 
 ## More Claude and Codex accounts
 
-Claude Code and the Codex CLI can each keep a login in a separate directory: `CLAUDE_CONFIG_DIR` for Claude Code, `CODEX_HOME` for Codex. Sign in once per directory:
+`usage` reports every Claude and Codex account it can find, from these places:
+
+1. The login each provider's CLI uses now: `~/.claude` (or `CLAUDE_CONFIG_DIR`) and `~/.codex` (or `CODEX_HOME`).
+2. Accounts you added with `quota-cli accounts add`.
+3. The config file.
+4. CodexBar's Codex accounts, and the extra Codex homes its config file lists (`codexProfileHomePaths`).
+5. claude-swap's Claude accounts, when `cswap` is installed.
+
+The same account often turns up in more than one place, so each account is shown once. Claude accounts are matched by email address and organization, the identity claude-swap uses too, and Codex accounts by workspace and email. The name is the most specific one any copy has: your label first, then nothing for the login the CLI uses now, then a claude-swap alias, then the email address. The numbers come from the copy whose token was renewed last.
+
+See what was found, and where:
 
 ```bash
-CLAUDE_CONFIG_DIR=~/.claude-work claude     # then /login
-CODEX_HOME=~/.codex-client codex login
+quota-cli accounts
 ```
 
-Then list those directories in `~/.config/quota-cli/config.toml` (or under `$XDG_CONFIG_HOME`, or in the file `QUOTA_CLI_CONFIG` names), each with a label for the report:
+```text
+claude
+  current      me@example.com      ~/.claude
+claude (work)
+  quota-cli    me@work.example     ~/Library/Application Support/quota-cli/accounts/claude/work
+codex
+  current      me@example.com      ~/.codex
+  codexbar     me@example.com      ~/Library/Application Support/CodexBar/managed-codex-homes/…
+```
+
+`--json` prints the same as records.
+
+### Adding an account
+
+```bash
+quota-cli accounts add claude work
+quota-cli accounts add codex client [--device-auth]
+```
+
+This makes a directory for the account under quota-cli's data directory, `~/Library/Application Support/quota-cli` on macOS and `~/.local/share/quota-cli` on Linux (`QUOTA_CLI_DATA_DIR` moves it), and runs the provider's own sign-in pointed at it: `claude auth login` with `CLAUDE_CONFIG_DIR` set, or `codex login` with `CODEX_HOME` set. The result is an ordinary login, so you can also work in that account:
+
+```bash
+CLAUDE_CONFIG_DIR="$HOME/Library/Application Support/quota-cli/accounts/claude/work" claude
+```
+
+Running `accounts add` again with a label that exists signs in to that account again in the same directory, which is the fix for a login that cannot be renewed any more. `accounts remove claude work` deletes the directory and, on macOS, the Keychain item Claude Code made for it. Accounts from the config file, CodexBar or claude-swap are removed in those places.
+
+### The config file
+
+A login you keep somewhere else can be listed in `~/.config/quota-cli/config.toml` (or under `$XDG_CONFIG_HOME`, or in the file `QUOTA_CLI_CONFIG` names), each with a label for the report:
 
 ```toml
 [[claude]]
@@ -95,20 +146,45 @@ label = "client"
 home = "~/.codex-client"
 ```
 
-`usage` reports the login each CLI is using now, plus every login in the file. When the current login is the same account as one in the file, it shows once, under the file's label. Claude logins are matched by the account Claude Code records in `.claude.json`, and Codex logins by the workspace and email in the token. A login in the file that cannot be read always shows, with the reason, so a typo in the file does not go unnoticed. An unknown key in the file is an error for the same reason.
+Sign in once per directory with `CLAUDE_CONFIG_DIR=~/.claude-work claude auth login` or `CODEX_HOME=~/.codex-client codex login`. Write `config_dir` the way you set `CLAUDE_CONFIG_DIR`. On macOS, Claude Code names the Keychain item after that exact text, so `~/.claude-work` and `~/.claude-work/` are two different items. Naming the default `~/.claude` means the default login.
 
-Write `config_dir` the way you set `CLAUDE_CONFIG_DIR`. On macOS, Claude Code names the Keychain item after that exact text, so `~/.claude-work` and `~/.claude-work/` are two different items. Naming the default `~/.claude` means the default login.
+An account you added or listed in the file always shows, even when it cannot be read, so a mistake does not go unnoticed. An unknown key in the file is an error for the same reason.
 
-The Herdr plugin keeps reporting the login each CLI is using now. A pane does not say which config directory its agent was started with.
+The file can also turn off reading other tools' accounts:
+
+```toml
+[sources]
+codexbar = false
+claude_swap = false
+```
+
+### CodexBar and claude-swap
+
+CodexBar keeps each Codex account it manages in a Codex home of its own, listed in `~/Library/Application Support/CodexBar/managed-codex-accounts.json`. Each one is an ordinary Codex login, so quota-cli reads it, and renews its token when needed, like any other.
+
+claude-swap keeps each Claude account's login in a store of its own and renews those tokens itself. A Claude refresh token works only once, so quota-cli never touches them: it runs `cswap --list --json` and shows the usage claude-swap measured. These accounts show no limit resets, because claude-swap does not report them.
+
+The Herdr plugin keeps reporting the login each CLI is using now. A pane does not say which account its agent was started with.
+
+## Expired logins
+
+A Claude access token lasts about eight hours, and a Codex token about ten days. A login nobody used in that time would report nothing, so `usage` renews an expired token before it asks for usage, and once more if the usage API turns a token down. It does this the way the provider's own CLI does, so the CLI picks up the new token instead of tripping over it:
+
+- **Claude.** quota-cli takes the two lock directories Claude Code takes while it renews (`.oauth_refresh.lock` in the config directory, and `<config directory>.lock` beside it), reads the login again, and writes the result only if the stored refresh token is still the one it sent. The renewed login goes back where it came from: the Keychain item, through `/usr/bin/security` as Claude Code writes it, or `.credentials.json`.
+- **Codex.** quota-cli renews against the issuer the login records, then writes `auth.json` under the `auth.lock` and `auth.json.lock` locks the CLI takes, only if the refresh token is unchanged, keeping every other field. If the CLI spent the same refresh token a moment earlier, quota-cli uses the CLI's result.
+
+A refresh token works only once, so quota-cli checks everything that could stop it from saving the result before it sends one. If saving still fails, the renewed login is kept in `<file>.quota-renewed` beside the store, and the report says where. Only an HTTP 401 from the usage API counts as a rejected token; a 403 is reported as a refused request and renews nothing.
+
+When the provider refuses to renew, the report says so and names the command that signs that account in again.
 
 ## Limit resets
 
 Codex and Claude can each bank one-time resets that refill a usage window when you choose, instead of when it rolls over. `usage` shows how many an account has, and when the next one expires if the provider says.
 
-- Codex reports the count in the same usage call, as `rate_limit_reset_credits`. Its expiry dates need a separate call, which `quota-cli` does not make.
+- Codex reports the count in the same usage call, as `rate_limit_reset_credits`. When the count is above zero, `quota-cli` reads the list of resets (`GET /wham/rate-limit-reset-credits`) for their expiry dates.
 - Claude reports resets per grant, with an end date, in the usage call when it asks for them (`cedar_ember=1`). The API only answers that part for a client whose user agent starts with `claude-cli/`, so the Claude usage call sends `claude-cli/<version> (external, cli) quota/<version>`. Any other user agent gets `ineligible_reason: "surface"`, which `quota-cli` treats as unknown, not as zero.
 
-`quota-cli` only reads these counts. Using a reset stays with the provider's own CLI.
+`quota-cli` only reads these. Using a reset stays with the provider's own CLI.
 
 ## Herdr plugin
 
@@ -132,7 +208,7 @@ A failed cycle is not fatal. If Herdr is not running, or a provider is signed ou
 
 | Provider | Source |
 |---|---|
-| Claude | `.credentials.json` in `CLAUDE_CONFIG_DIR` (default `~/.claude`), or the macOS Keychain when that file is missing |
+| Claude | The macOS Keychain, or `.credentials.json` in `CLAUDE_CONFIG_DIR` (default `~/.claude`) where there is no Keychain item |
 | Codex | `~/.codex/auth.json`, honoring `CODEX_HOME` |
 | Cursor | `~/.config/cursor/auth.json` |
 | Antigravity | OS keyring, falling back to `~/.gemini/oauth_creds.json` |
@@ -143,7 +219,7 @@ Three of these are worth knowing about. Cursor, Kiro, and Antigravity keep separ
 
 ## What it does not do
 
-Every reader is strictly read-only, and so is the config file. Nothing is refreshed, rewritten, or rotated, because those tokens back your own agent sessions and rotating one could leave your real CLI holding a dead credential. Antigravity is the single exception, and only because Google does not rotate its refresh token: a fresh access token is held in memory for one request and nothing is written to disk.
+Apart from renewing expired Claude and Codex tokens as described in [Expired logins](#expired-logins), nothing is refreshed, rewritten, or rotated, because those tokens back your own agent sessions and rotating one carelessly could leave your real CLI holding a dead credential. claude-swap's tokens are never touched. Antigravity is renewed only in memory, because Google does not rotate its refresh token: a fresh access token is held for one request and nothing is written to disk.
 
 The practical effect shows up with Kiro. Its CLI refreshes its token only when it has a reason to call the service, so an idle machine holds a lapsed token and `quota-cli` reports that instead of a number. Using Kiro refreshes it.
 

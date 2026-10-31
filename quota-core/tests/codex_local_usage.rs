@@ -175,6 +175,7 @@ fn a_login_is_identified_by_workspace_and_email() {
         account_id: Some("acct-1".to_string()),
         email: Some("Someone@Example.com".to_string()),
         plan: None,
+        access_token_expires_at_ms: None,
     };
     assert_eq!(
         credentials.identity().as_deref(),
@@ -186,6 +187,58 @@ fn a_login_is_identified_by_workspace_and_email() {
         account_id: None,
         email: None,
         plan: None,
+        access_token_expires_at_ms: None,
     };
     assert_eq!(anonymous.identity(), None);
+}
+
+#[test]
+fn counts_usable_reset_credits_and_finds_the_soonest_expiry() {
+    use quota_core::codex::local_usage::reset_credits_from;
+
+    let now = 1_790_000_000; // 2026-09-21
+    let raw = serde_json::json!({
+        "available_count": 4,
+        "credits": [
+            {"id": "a", "status": "available", "expires_at": "2026-11-20T00:00:00Z"},
+            {"id": "b", "status": "available", "expires_at": "2026-10-01T00:00:00Z"},
+            {"id": "c", "status": "available", "expires_at": null},
+            {"id": "d", "status": "redeemed", "expires_at": "2026-09-30T00:00:00Z"},
+            {"id": "e", "status": "available", "expires_at": "2026-09-01T00:00:00Z"}
+        ]
+    });
+    let resets = reset_credits_from(&raw, now).expect("resets");
+    assert_eq!(resets.available, 3);
+    assert_eq!(resets.expires_at, Some(1_790_812_800)); // 2026-10-01
+
+    assert_eq!(reset_credits_from(&serde_json::json!({}), now), None);
+}
+
+#[test]
+fn reads_the_expiry_of_an_access_token() {
+    use quota_core::codex::local::jwt_expiry;
+
+    // {"exp":1800000000}
+    let token = "eyJhbGciOiJub25lIn0.eyJleHAiOjE4MDAwMDAwMDB9.sig";
+    assert_eq!(
+        jwt_expiry(token).map(|at| at.timestamp()),
+        Some(1_800_000_000)
+    );
+    assert_eq!(jwt_expiry("not-a-jwt"), None);
+}
+
+#[test]
+fn codex_treats_the_same_refresh_errors_as_final_as_the_cli_does() {
+    use quota_core::codex::refresh::classify_failure;
+
+    for body in [
+        r#"{"error":"refresh_token_reused"}"#,
+        r#"{"error":{"code":"refresh_token_expired"}}"#,
+        r#"{"code":"refresh_token_invalidated"}"#,
+    ] {
+        assert!(classify_failure(400, body).needs_sign_in(), "{}", body);
+    }
+    assert!(classify_failure(400, r#"{"error":"invalid_grant"}"#).needs_sign_in());
+    assert!(classify_failure(401, "").needs_sign_in());
+    assert!(!classify_failure(500, r#"{"error":"server_error"}"#).needs_sign_in());
 }

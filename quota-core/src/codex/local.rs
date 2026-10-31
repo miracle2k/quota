@@ -1,8 +1,7 @@
-//! Read-only access to the credentials the Codex CLI stores locally.
+//! Access to the credentials the Codex CLI stores locally.
 //!
-//! Quota never refreshes or rewrites this file. Rotating the refresh token here
-//! would invalidate the copy the Codex CLI itself is using and break the user's
-//! CLI, so a rejected token is reported rather than renewed.
+//! Everything here only reads. Renewing an expired token lives in
+//! [`super::refresh`], which writes the file the way the Codex CLI does.
 
 use base64::Engine;
 use serde::Deserialize;
@@ -26,6 +25,8 @@ pub struct LocalCodexCredentials {
     pub account_id: Option<String>,
     pub email: Option<String>,
     pub plan: Option<String>,
+    /// When the access token expires, in milliseconds, read from the token.
+    pub access_token_expires_at_ms: Option<i64>,
 }
 
 impl LocalCodexCredentials {
@@ -53,6 +54,7 @@ impl fmt::Debug for LocalCodexCredentials {
             .field("account_id", &self.account_id)
             .field("email", &self.email)
             .field("plan", &self.plan)
+            .field("access_token_expires_at_ms", &self.access_token_expires_at_ms)
             .finish()
     }
 }
@@ -186,13 +188,28 @@ pub fn read_local_credentials_at(path: &Path) -> Result<LocalCodexCredentials, L
     });
 
     let plan = auth_data.and_then(|data| normalize(data.chatgpt_plan_type.clone()));
+    let access_token_expires_at_ms =
+        jwt_expiry(&access_token).map(|expires_at| expires_at.timestamp_millis());
 
     Ok(LocalCodexCredentials {
         access_token,
         account_id,
         email,
         plan,
+        access_token_expires_at_ms,
     })
+}
+
+/// The `exp` claim of a JWT, without checking its signature. `None` when the
+/// token is not a JWT or carries no expiry.
+pub fn jwt_expiry(token: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let seconds = claims.get("exp")?.as_i64()?;
+    chrono::DateTime::from_timestamp(seconds, 0)
 }
 
 /// Convenience wrapper over the default path.

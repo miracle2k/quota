@@ -1,6 +1,7 @@
 //! The optional config file. It lists extra Claude and Codex logins for
 //! `usage` to report on, each kept in its own directory the way the provider's
-//! CLI keeps one when pointed somewhere else.
+//! CLI keeps one when pointed somewhere else, and can turn off reading the
+//! accounts of other tools.
 //!
 //! ```toml
 //! [[claude]]
@@ -10,6 +11,10 @@
 //! [[codex]]
 //! label = "personal"
 //! home = "~/.codex-personal"      # the CODEX_HOME of that login
+//!
+//! [sources]
+//! codexbar = true      # CodexBar's Codex accounts
+//! claude_swap = true   # claude-swap's Claude accounts
 //! ```
 
 use serde::Deserialize;
@@ -25,6 +30,32 @@ pub struct Config {
     pub claude: Vec<ClaudeAccount>,
     #[serde(default)]
     pub codex: Vec<CodexAccount>,
+    #[serde(default)]
+    pub sources: Sources,
+}
+
+/// Other tools whose accounts `usage` reads when they are installed. Both are
+/// on unless the file turns them off.
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sources {
+    #[serde(default = "enabled")]
+    pub codexbar: bool,
+    #[serde(default = "enabled")]
+    pub claude_swap: bool,
+}
+
+impl Default for Sources {
+    fn default() -> Self {
+        Self {
+            codexbar: true,
+            claude_swap: true,
+        }
+    }
+}
+
+fn enabled() -> bool {
+    true
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
