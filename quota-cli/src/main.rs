@@ -143,28 +143,16 @@ async fn run_usage(json: bool, all: bool, providers: &[String]) {
                     config.usage.hides_errors_of(report.provider),
                 )
             })
-            .map(|report| {
-                (
-                    render::account_name(report.provider, report.label.as_deref()),
-                    report,
-                )
-            })
             .collect();
-
-        let width = shown.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
-
-        for (name, report) in &shown {
-            let detail = match &report.result {
-                Ok(usage) => render::usage_detail(usage, now)
-                    .unwrap_or_else(|| "no usage numbers reported".to_string()),
-                Err(err) => err.message.clone(),
-            };
-            println!("{:<width$}  {}", name, detail, width = width);
-        }
 
         if shown.is_empty() {
             eprintln!(
                 "No provider has a login here. Run `quota-cli usage --all` to see each reason."
+            );
+        } else {
+            print!(
+                "{}",
+                render::usage_report(&shown, now, render::colors_enabled())
             );
         }
     }

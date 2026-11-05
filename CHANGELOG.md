@@ -6,6 +6,7 @@ All notable changes to this project will be documented here.
 
 ### 🖥️ quota-cli
 
+- `usage` now prints compact account rows: a provider, account label, and email on the first line, followed by one indented line per quota window and a separate line for banked reset credits. Terminal output uses color for quota health and stays plain when redirected, or with `NO_COLOR` / `CLICOLOR=0`.
 - `usage` leaves out providers you are not signed into, and logins with nothing to show. `--all` lists them again, with the reason.
 - `usage --json` now has one record per account, including the ones without a login, with `status` (`ok`, `not_configured`, `error`), `label`, `email`, `sources`, `resets`, and `error` on every record.
 - `usage claude codex` checks only the named providers.

@@ -42,9 +42,16 @@ quota-cli usage
 ```
 
 ```text
-claude   5h 98% (resets in 4h 58m) · Wk 35% (resets in 3d 9h)
-codex    5h 100% (resets in 4h 59m) · Wk 95% (resets in 4d 6h)
-cursor   Plan 100% (resets in 8d 3h)
+Claude  default  me@example.com
+        5h 98% left · resets in 4h 58m
+        Wk 35% left · resets in 3d 9h
+
+Codex   default  me@example.com
+        5h 100% left · resets in 4h 59m
+        Wk 95% left · resets in 4d 6h
+
+Cursor  default  me@example.com
+        Plan 100% left · resets in 8d 3h
 ```
 
 ### **You must install `quota-cli` first for the plugin to work.**

@@ -23,16 +23,34 @@ quota-cli usage
 ```
 
 ```text
-claude                    5h 98% left (resets in 4h 58m) · Wk 35% left (resets in 3d 9h)
-claude (work)             Wk 12% left (resets in 2d 4h) · 1 reset available (expires in 9d 2h)
-codex                     5h 100% left (resets in 4h 59m) · Wk 95% left (resets in 4d 6h)
-codex (client)            5h 0% left (resets in 1h 10m) · Wk 60% left (resets in 4d 6h) · 2 resets available (next expires in 6d 4h)
-codex (me@example.com)    Wk 94% left (resets in 5d)
-kiro                      Credits 100% left · Bonus 100% left
-zai                       $7.95 balance · No GLM Coding Plan
+Claude  default  me@example.com
+        5h 98% left · resets in 4h 58m
+        Wk 35% left · resets in 3d 9h
+
+Claude  work     work@example.com
+        Wk 12% left · resets in 2d 4h
+        1 reset available · expires in 9d 2h
+
+Codex   default  me@example.com
+        5h 100% left · resets in 4h 59m
+        Wk 95% left · resets in 4d 6h
+
+Codex   client   client@example.com
+        5h 0% left · resets in 1h 10m
+        Wk 60% left · resets in 4d 6h
+        2 resets available · next expires in 6d 4h
+
+Kiro    default  me@example.com
+        Credits 100% left
+        Bonus 100% left
+
+Z.ai    default  email unavailable
+        Balance $7.95 · No GLM Coding Plan
 ```
 
-Percentages are what you have left, not what you have used. Reset times show when a provider reports one, and Kiro currently does not. Banked limit resets show when an account has at least one, see [Limit resets](#limit-resets).
+The first line identifies the provider, account label, and email. Each quota window and banked reset has its own indented line, so long reports do not wrap into each other. Percentages are what you have left, not what you have used. Reset times show when a provider reports one, and Kiro currently does not. Banked limit resets show when an account has at least one, see [Limit resets](#limit-resets).
+
+Interactive terminals use color: remaining quota is green, yellow, or red; account details and timing are dimmed. Redirected output stays plain. Set `NO_COLOR` or `CLICOLOR=0` to disable color, or `CLICOLOR_FORCE=1` to force it.
 
 Providers you are not signed into are left out, and so is a login with nothing to show. `--all` lists them too, with the reason:
 

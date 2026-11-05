@@ -2,7 +2,7 @@
 //! the Herdr sidebar token deliberately leaves out.
 
 use quota_cli::accounts::{AccountReport, Source};
-use quota_cli::render::{account_name, shown_in_text, usage_detail, usage_record};
+use quota_cli::render::{account_name, shown_in_text, usage_detail, usage_record, usage_report};
 use quota_core::providers::ProviderError;
 use quota_core::usage::{LimitResets, ProviderUsage, UsageWindow};
 
@@ -184,6 +184,81 @@ fn zero_resets_add_nothing_to_the_line() {
 fn a_label_from_the_config_file_follows_the_provider_name() {
     assert_eq!(account_name("codex", Some("work")), "codex (work)");
     assert_eq!(account_name("codex", None), "codex");
+}
+
+#[test]
+fn compact_rows_show_the_label_and_email_then_indented_usage() {
+    let codex = AccountReport {
+        provider: "codex",
+        label: Some("client".to_string()),
+        email: Some("client@example.com".to_string()),
+        sources: vec![Source::Config],
+        result: Ok(with_resets(
+            usage(
+                vec![window("5h", Some(0), Some(NOW + 2 * 3600 + 14 * 60))],
+                None,
+            ),
+            2,
+            Some(NOW + 6 * 86_400 + 4 * 3600),
+        )),
+    };
+    let claude = AccountReport {
+        provider: "claude",
+        label: Some("me@example.com".to_string()),
+        email: Some("me@example.com".to_string()),
+        sources: vec![Source::Pi],
+        result: Ok(usage(vec![window("Wk", Some(40), None)], None)),
+    };
+
+    assert_eq!(
+        usage_report(&[&codex, &claude], NOW, false),
+        "Codex   client   client@example.com\n\
+         \x20       5h 0% left · resets in 2h 14m\n\
+         \x20       2 resets available · next expires in 6d 4h\n\
+         \n\
+         Claude  default  me@example.com\n\
+         \x20       Wk 40% left\n"
+    );
+}
+
+#[test]
+fn compact_rows_keep_each_window_on_its_own_line() {
+    let report = AccountReport {
+        provider: "antigravity",
+        label: None,
+        email: Some("me@example.com".to_string()),
+        sources: vec![Source::Current],
+        result: Ok(usage(
+            vec![
+                window("5h", Some(80), Some(NOW + 2 * 3600)),
+                window("Wk", Some(60), Some(NOW + 6 * 86_400)),
+            ],
+            None,
+        )),
+    };
+
+    assert_eq!(
+        usage_report(&[&report], NOW, false),
+        "Antigravity  default  me@example.com\n\
+         \x20            5h 80% left · resets in 2h\n\
+         \x20            Wk 60% left · resets in 6d\n"
+    );
+}
+
+#[test]
+fn compact_rows_color_the_quota_and_dim_the_email() {
+    let report = AccountReport {
+        provider: "codex",
+        label: Some("client".to_string()),
+        email: Some("client@example.com".to_string()),
+        sources: vec![Source::Config],
+        result: Ok(usage(vec![window("Wk", Some(0), None)], None)),
+    };
+
+    let rendered = usage_report(&[&report], NOW, true);
+    assert!(rendered.starts_with("\x1b[1;36mCodex\x1b[0m"));
+    assert!(rendered.contains("\x1b[2mclient@example.com\x1b[0m"));
+    assert!(rendered.contains("\x1b[1;31m0%\x1b[0m"));
 }
 
 /// A report for the current login, or for a config file entry when it has a

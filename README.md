@@ -122,15 +122,30 @@ quota-cli usage
 ```
 
 ```text
-claude       5h 98% left (resets in 4h 58m) · Wk 35% left (resets in 3d 9h)
-codex        5h 100% left (resets in 4h 59m) · Wk 95% left (resets in 4d 6h)
-cursor       Plan 100% left (resets in 8d 3h)
-antigravity  5h 100% left (resets in 4h 59m) · Wk 97% left (resets in 6d 17h)
-grok         no credit allocation
-kiro         Credits 100% left · Bonus 100% left
+Claude       default  me@example.com
+             5h 98% left · resets in 4h 58m
+             Wk 35% left · resets in 3d 9h
+
+Codex        default  me@example.com
+             5h 100% left · resets in 4h 59m
+             Wk 95% left · resets in 4d 6h
+
+Cursor       default  me@example.com
+             Plan 100% left · resets in 8d 3h
+
+Antigravity  default  me@example.com
+             5h 100% left · resets in 4h 59m
+             Wk 97% left · resets in 6d 17h
+
+Grok         default  me@example.com
+             no credit allocation
+
+Kiro         default  me@example.com
+             Credits 100% left
+             Bonus 100% left
 ```
 
-Percentages are what you have left. Reset times show when a provider reports one. Anything you're not signed into says so instead of showing a number. Add `--json` for scripting.
+The first line identifies the provider, account label, and email. Each quota window has its own indented line, so the report remains readable in narrow terminals. Percentages are what you have left. Reset times show when a provider reports one. Anything you're not signed into says so instead of showing a number. Add `--json` for scripting.
 
 It covers Claude, Codex, Cursor, Antigravity, Grok, and Kiro. GitHub Copilot is desktop-only for now. Every reader is strictly read-only: nothing is refreshed, rewritten, or rotated, because those tokens back your own agent sessions.
 

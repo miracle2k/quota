@@ -63,6 +63,250 @@ pub fn account_name(provider: &str, label: Option<&str>) -> String {
     }
 }
 
+/// Whether normal text output should use ANSI color.
+///
+/// Piped output stays plain for scripts. `NO_COLOR` and `CLICOLOR=0` disable
+/// color, while `CLICOLOR_FORCE` and `FORCE_COLOR` can explicitly enable it.
+pub fn colors_enabled() -> bool {
+    use std::io::IsTerminal;
+
+    if std::env::var_os("NO_COLOR").is_some()
+        || matches!(std::env::var("CLICOLOR").as_deref(), Ok("0"))
+    {
+        return false;
+    }
+    if ["CLICOLOR_FORCE", "FORCE_COLOR"]
+        .into_iter()
+        .any(environment_enables_color)
+    {
+        return true;
+    }
+    if matches!(std::env::var("TERM").as_deref(), Ok("dumb")) {
+        return false;
+    }
+    std::io::stdout().is_terminal()
+}
+
+fn environment_enables_color(variable: &str) -> bool {
+    std::env::var(variable).ok().is_some_and(|value| {
+        let value = value.trim();
+        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+    })
+}
+
+/// Render the normal terminal report as compact account rows. Each row starts
+/// with the provider, account label, and email, followed by one indented line
+/// per quota item. This keeps individual items from wrapping into each other.
+pub fn usage_report(reports: &[&AccountReport], now: i64, color: bool) -> String {
+    let provider_width = reports
+        .iter()
+        .map(|report| display_width(provider_name(report.provider)))
+        .max()
+        .unwrap_or(0);
+    let account_names: Vec<String> = reports
+        .iter()
+        .map(|report| account_heading(report))
+        .collect();
+    let account_width = account_names
+        .iter()
+        .map(|name| display_width(name))
+        .max()
+        .unwrap_or(0);
+    let indent = " ".repeat(provider_width + 2);
+    let mut output = String::new();
+
+    for (index, (report, account_name)) in reports.iter().zip(account_names.iter()).enumerate() {
+        if index > 0 {
+            output.push('\n');
+        }
+
+        let provider = pad_end(provider_name(report.provider), provider_width);
+        let account = pad_end(account_name, account_width);
+        let email = report.email.as_deref().unwrap_or("email unavailable");
+        output.push_str(&paint(&provider, "1;36", color));
+        output.push_str("  ");
+        output.push_str(&paint(&account, "1", color));
+        output.push_str("  ");
+        output.push_str(&paint(email, "2", color));
+        output.push('\n');
+
+        match &report.result {
+            Ok(usage) => append_usage_lines(&mut output, &indent, usage, now, color),
+            Err(error) => {
+                let color_code = if error.not_configured { "1;33" } else { "1;31" };
+                append_detail_line(
+                    &mut output,
+                    &indent,
+                    format!(
+                        "{} {}",
+                        paint("Error:", color_code, color),
+                        paint(&error.message, color_code, color)
+                    ),
+                );
+            }
+        }
+    }
+
+    output
+}
+
+fn provider_name(provider: &str) -> &str {
+    match provider {
+        "claude" => "Claude",
+        "codex" => "Codex",
+        "cursor" => "Cursor",
+        "antigravity" => "Antigravity",
+        "grok" => "Grok",
+        "kiro" => "Kiro",
+        "zai" => "Z.ai",
+        other => other,
+    }
+}
+
+fn account_heading(report: &AccountReport) -> String {
+    match report.label.as_deref() {
+        Some(label)
+            if report
+                .email
+                .as_deref()
+                .is_none_or(|email| !label.eq_ignore_ascii_case(email)) =>
+        {
+            label.to_string()
+        }
+        _ => "default".to_string(),
+    }
+}
+
+fn append_usage_lines(
+    output: &mut String,
+    indent: &str,
+    usage: &ProviderUsage,
+    now: i64,
+    color: bool,
+) {
+    let mut has_window = false;
+    let mut wrote_detail = false;
+
+    for window in &usage.windows {
+        let Some(percent) = window.remaining_percent else {
+            continue;
+        };
+        has_window = true;
+        wrote_detail = true;
+        let mut detail = format!(
+            "{} {} {}",
+            paint(&window.label, "1", color),
+            paint(&format!("{}%", percent), quota_color(percent), color),
+            "left"
+        );
+        if let Some(reset_at) = window.reset_at {
+            detail.push_str(&paint(" · ", "2", color));
+            detail.push_str(&paint(&relative_reset(reset_at, now), "2", color));
+        }
+        append_detail_line(output, indent, detail);
+    }
+
+    if let Some(resets) = usage.resets.as_ref() {
+        if let Some(detail) = resets_line(resets, now, color) {
+            wrote_detail = true;
+            append_detail_line(output, indent, detail);
+        }
+    }
+
+    if let Some(balance) = &usage.balance {
+        wrote_detail = true;
+        let mut detail = format!("Balance {}", paint(&balance.display(), "1;32", color));
+        if !has_window {
+            if let Some(note) = &usage.note {
+                detail.push_str(&paint(" · ", "2", color));
+                detail.push_str(&paint(note, "2", color));
+            }
+        }
+        append_detail_line(output, indent, detail);
+    } else if !has_window {
+        if let Some(note) = &usage.note {
+            wrote_detail = true;
+            append_detail_line(output, indent, paint(note, "2", color));
+        }
+    }
+
+    if !wrote_detail {
+        append_detail_line(
+            output,
+            indent,
+            paint("no usage numbers reported", "2", color),
+        );
+    }
+}
+
+fn resets_line(resets: &LimitResets, now: i64, color: bool) -> Option<String> {
+    if resets.available == 0 {
+        return None;
+    }
+
+    let mut detail = paint(
+        &format!(
+            "{} {} available",
+            resets.available,
+            if resets.available == 1 {
+                "reset"
+            } else {
+                "resets"
+            }
+        ),
+        "1;36",
+        color,
+    );
+    if let Some(expires_at) = resets.expires_at {
+        let which = if resets.available == 1 {
+            "expires"
+        } else {
+            "next expires"
+        };
+        let expiry = match duration_until(expires_at, now) {
+            Some(left) => format!("{} in {}", which, left),
+            None => format!("{} now", which),
+        };
+        detail.push_str(&paint(" · ", "2", color));
+        detail.push_str(&paint(&expiry, "2", color));
+    }
+    Some(detail)
+}
+
+fn append_detail_line(output: &mut String, indent: &str, detail: String) {
+    output.push_str(indent);
+    output.push_str(&detail);
+    output.push('\n');
+}
+
+fn quota_color(percent: i32) -> &'static str {
+    match percent {
+        ..=20 => "1;31",
+        21..=49 => "1;33",
+        _ => "1;32",
+    }
+}
+
+fn paint(text: &str, code: &str, color: bool) -> String {
+    if color {
+        format!("\x1b[{}m{}\x1b[0m", code, text)
+    } else {
+        text.to_string()
+    }
+}
+
+fn display_width(text: &str) -> usize {
+    text.chars().count()
+}
+
+fn pad_end(text: &str, width: usize) -> String {
+    format!(
+        "{}{}",
+        text,
+        " ".repeat(width.saturating_sub(display_width(text)))
+    )
+}
+
 /// Whether the text report shows an account. Without `--all` it leaves out
 /// providers that are not set up here, logins with nothing to show, and
 /// failures of the providers the config file lists in `usage.hide_errors`.
@@ -267,7 +511,8 @@ pub fn shorten_home(path: &str) -> String {
 }
 
 /// "2 resets available (next expires in 6d 4h)". Nothing for zero, since a
-/// line per account saying so would only be noise.
+/// line per account saying so would only be noise. This summary is retained
+/// for the visibility decision; normal terminal output renders it separately.
 fn resets_detail(resets: &LimitResets, now: i64) -> Option<String> {
     let count = resets.available;
     if count == 0 {

@@ -42,7 +42,7 @@ It doesn't need the desktop app installed or running.
 quota-cli usage
 ```
 
-Percentages are what you have left, not what you've used. Reset times show up when a provider reports one, and Kiro currently doesn't.
+The first line for each account shows its provider, label, and email. Each quota window and banked reset has its own indented line, so long reports stay readable in narrow terminals. Interactive terminals use color for quota health; redirected output stays plain. Percentages are what you have left, not what you've used. Reset times show up when a provider reports one, and Kiro currently doesn't.
 
 For scripts, `--json` prints the same data as an array:
 
